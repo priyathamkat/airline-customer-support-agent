@@ -1,9 +1,10 @@
 "use client";
 
-import { Check, Copy, ExternalLink, Loader2, Lock, Sparkles, Terminal } from "lucide-react";
+import { Check, ExternalLink, Loader2, Lock, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { CommandBlock } from "@/components/command-block";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -20,11 +21,13 @@ const API_KEY_URL = "https://platform.relai.ai/settings/workspace/api-keys";
 export function SetupGate({
   steps,
   ready,
+  projectRoot,
   onContinue,
   continueLabel = "Get started"
 }: {
   steps: PrerequisiteStep[];
   ready: boolean;
+  projectRoot?: string;
   onContinue: () => void;
   continueLabel?: string;
 }) {
@@ -97,30 +100,12 @@ export function SetupGate({
 
                         {isActive && step.command ? (
                           <div className="mt-3 grid gap-2.5">
-                            <div className="overflow-hidden rounded-lg border border-border bg-[var(--background)]">
-                              <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-                                <Terminal className="size-3.5 text-muted-foreground" />
-                                <span className="text-xs font-medium text-muted-foreground">
-                                  Run in your terminal
-                                </span>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="ml-auto size-7 text-muted-foreground hover:text-foreground"
-                                  onClick={() => void copy(step)}
-                                  aria-label="Copy command"
-                                >
-                                  {copiedId === step.id ? (
-                                    <Check className="text-[color:var(--success)]" />
-                                  ) : (
-                                    <Copy />
-                                  )}
-                                </Button>
-                              </div>
-                              <pre className="overflow-x-auto px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground/85">
-                                <code>{step.command}</code>
-                              </pre>
-                            </div>
+                            <CommandBlock
+                              command={step.command}
+                              projectRoot={projectRoot}
+                              copied={copiedId === step.id}
+                              onCopy={() => void copy(step)}
+                            />
 
                             <div className="flex items-center gap-2 px-0.5 text-sm text-muted-foreground">
                               <Loader2 className="size-4 shrink-0 spin" />

@@ -111,7 +111,7 @@ def common_init_step(relai_dir: Path) -> WalkthroughStep:
             ".relai/learning-env-context.json",
         ],
         succeeded=init_succeeded,
-        next_action="Run this from the project root to register the Python agent and generate simulator support.",
+        next_action="Registers your agent project with RELAI and generates simulator support.",
     )
 
 
@@ -149,6 +149,7 @@ def prerequisites_status(
     init = common_init_step(root / ".relai")
     return {
         "ready": setup.succeeded and init.succeeded,
+        "projectRoot": str(root),
         "steps": [serialize_step(setup), serialize_step(init)],
     }
 

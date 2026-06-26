@@ -5,8 +5,6 @@ import {
   ArrowRight,
   Check,
   CircleHelp,
-  ClipboardCheck,
-  Copy,
   Loader2,
   MessageSquare,
   PanelLeftClose,
@@ -15,8 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
-  Sparkles,
-  Terminal
+  Sparkles
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -44,8 +41,10 @@ import {
   TooltipContent,
   TooltipTrigger
 } from "@/components/ui/tooltip";
+import { CommandBlock } from "@/components/command-block";
 import { GuidedTour, type TourStep } from "@/components/tour";
 import { SetupGate } from "@/components/setup-gate";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "assistant";
@@ -86,6 +85,7 @@ type LearningTrack = {
 
 type PrerequisitesStatus = {
   ready: boolean;
+  projectRoot: string;
   steps: WalkthroughStep[];
 };
 
@@ -255,22 +255,31 @@ export default function Home() {
   activeStepIndexRef.current = activeStepIndex;
 
   const refreshPrerequisites = useCallback(async (): Promise<PrerequisitesStatus | null> => {
-    const response = await fetch(`${API_BASE_URL}/api/prerequisites/status`, { cache: "no-store" });
-    if (!response.ok) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/prerequisites/status`, { cache: "no-store" });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as PrerequisitesStatus;
+      setPrereq(payload);
+      return payload;
+    } catch {
+      // Backend not reachable (e.g. starting up) — degrade gracefully; pollers retry.
       return null;
     }
-    const payload = (await response.json()) as PrerequisitesStatus;
-    setPrereq(payload);
-    return payload;
   }, []);
 
   const refreshSessions = useCallback(async () => {
-    const response = await fetch(`${API_BASE_URL}/api/sessions`, { cache: "no-store" });
-    if (!response.ok) {
-      return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as { sessions: ChatSession[] };
+      setSessions(payload.sessions);
+    } catch {
+      // Backend not reachable yet — ignore; this is refetched on the next action/poll.
     }
-    const payload = (await response.json()) as { sessions: ChatSession[] };
-    setSessions(payload.sessions);
   }, []);
 
   const refreshWalkthrough = useCallback(
@@ -287,26 +296,33 @@ export default function Home() {
       if (nextSessionId) {
         params.set("sessionId", nextSessionId);
       }
-      const response = await fetch(`${API_BASE_URL}/api/walkthrough/status?${params}`, {
-        cache: "no-store"
-      });
-      if (!response.ok) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/walkthrough/status?${params}`, {
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          if (checkingStepId) {
+            setStepStatuses((current) => ({ ...current, [checkingStepId]: "failed" }));
+          }
+          return null;
+        }
+        const payload = (await response.json()) as WalkthroughStatus;
+        setWalkthrough(payload);
+        if (checkingStepId) {
+          const checkedStep = payload.steps.find((step) => step.id === checkingStepId);
+          const succeeded = checkedStep?.succeeded ?? (checkingStepId === "init" && payload.steps[0]?.id !== "init");
+          setStepStatuses((current) => ({
+            ...current,
+            [checkingStepId]: succeeded ? "ready" : "failed"
+          }));
+        }
+        return payload;
+      } catch {
         if (checkingStepId) {
           setStepStatuses((current) => ({ ...current, [checkingStepId]: "failed" }));
         }
         return null;
       }
-      const payload = (await response.json()) as WalkthroughStatus;
-      setWalkthrough(payload);
-      if (checkingStepId) {
-        const checkedStep = payload.steps.find((step) => step.id === checkingStepId);
-        const succeeded = checkedStep?.succeeded ?? (checkingStepId === "init" && payload.steps[0]?.id !== "init");
-        setStepStatuses((current) => ({
-          ...current,
-          [checkingStepId]: succeeded ? "ready" : "failed"
-        }));
-      }
-      return payload;
     },
     [envName, feedback, prompt, scenarioSessionId, selectedTrackId]
   );
@@ -453,30 +469,39 @@ export default function Home() {
   }, [canPoll, refreshWalkthrough]);
 
   async function startSession(resetMessages = true) {
-    const response = await fetch(`${API_BASE_URL}/api/sessions`, { method: "POST" });
-    if (!response.ok) {
-      setChatError("Could not create a session.");
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions`, { method: "POST" });
+      if (!response.ok) {
+        setChatError("Could not create a session.");
+        return null;
+      }
+      const payload = (await response.json()) as { session: ChatSession };
+      setSessionId(payload.session.id);
+      if (resetMessages) {
+        setMessages([]);
+      }
+      await refreshSessions();
+      return payload.session.id;
+    } catch {
+      setChatError("Could not reach the server. Is the backend running?");
       return null;
     }
-    const payload = (await response.json()) as { session: ChatSession };
-    setSessionId(payload.session.id);
-    if (resetMessages) {
-      setMessages([]);
-    }
-    await refreshSessions();
-    return payload.session.id;
   }
 
   async function loadSession(id: string) {
-    const response = await fetch(`${API_BASE_URL}/api/sessions/${id}`, { cache: "no-store" });
-    if (!response.ok) {
-      setChatError("Could not load that session.");
-      return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${id}`, { cache: "no-store" });
+      if (!response.ok) {
+        setChatError("Could not load that session.");
+        return;
+      }
+      const payload = (await response.json()) as { id: string; messages: ChatMessage[] };
+      setSessionId(payload.id);
+      setMessages(payload.messages);
+      setChatError(null);
+    } catch {
+      setChatError("Could not reach the server. Is the backend running?");
     }
-    const payload = (await response.json()) as { id: string; messages: ChatMessage[] };
-    setSessionId(payload.id);
-    setMessages(payload.messages);
-    setChatError(null);
   }
 
   async function streamMessage(messageText: string, forceNewSession = false) {
@@ -640,7 +665,7 @@ export default function Home() {
     >
       {/* Right column — learning tracks / walkthrough */}
       <section
-        className="flex min-h-0 flex-col overflow-y-auto border-b border-border bg-card/40 p-6 lg:order-3 lg:border-b-0 lg:border-l"
+        className="flex min-h-0 flex-col overflow-y-auto border-b border-border bg-muted/40 p-6 lg:order-3 lg:border-b-0 lg:border-l"
         aria-label="RELAI walkthrough"
       >
         <div data-tour="tracks">
@@ -760,32 +785,12 @@ export default function Home() {
               ) : null}
 
               {activeStep.command ? (
-                <div className="group relative overflow-hidden rounded-lg border border-border bg-[var(--background)]">
-                  <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-                    <Terminal className="size-3.5 text-muted-foreground" />
-                    <span className="text-xs font-medium text-muted-foreground">Run in your terminal</span>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="ml-auto size-7 text-muted-foreground hover:text-foreground"
-                          onClick={() => void copyCommand(activeStep)}
-                        >
-                          {copiedStepId === activeStep.id ? (
-                            <ClipboardCheck className="text-[color:var(--success)]" />
-                          ) : (
-                            <Copy />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Copy command</TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <pre className="overflow-x-auto px-3 py-3 font-mono text-xs leading-relaxed text-foreground/85">
-                    <code>{activeStep.command}</code>
-                  </pre>
-                </div>
+                <CommandBlock
+                  command={activeStep.command}
+                  projectRoot={walkthrough?.projectRoot}
+                  copied={copiedStepId === activeStep.id}
+                  onCopy={() => void copyCommand(activeStep)}
+                />
               ) : null}
 
               {/* Live verification status */}
@@ -840,6 +845,7 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <ThemeToggle />
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -923,7 +929,7 @@ export default function Home() {
 
       {/* Left column — session history (collapsible) */}
       <aside
-        className="hidden min-h-0 flex-col border-r border-border bg-card/40 lg:flex lg:order-1"
+        className="hidden min-h-0 flex-col border-r border-border bg-muted/40 lg:flex lg:order-1"
         aria-label="Session history"
         data-tour="history"
       >
@@ -1010,7 +1016,7 @@ export default function Home() {
                       "truncate rounded-md px-2.5 py-2 text-left text-sm transition-colors",
                       session.id === sessionId
                         ? "bg-accent font-medium text-accent-foreground"
-                        : "text-foreground/80 hover:bg-accent/60 hover:text-foreground"
+                        : "text-foreground hover:bg-accent/60"
                     )}
                   >
                     {session.preview || "New session"}
@@ -1031,6 +1037,7 @@ export default function Home() {
         <SetupGate
           steps={prereq.steps}
           ready={prereq.ready}
+          projectRoot={prereq.projectRoot}
           onContinue={continueFromGate}
           continueLabel={tourSeen ? "Get started" : "Start the tour"}
         />
