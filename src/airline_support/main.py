@@ -19,6 +19,7 @@ from airline_support.sessions import (
 )
 from airline_support.walkthrough import (
     PROMPT_TRACK_ID,
+    prerequisites_status,
     walkthrough_status,
 )
 
@@ -97,6 +98,11 @@ async def stream_chat(request: ChatRequest) -> StreamingResponse:
             yield sse_event("error", {"message": str(error)})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/prerequisites/status")
+def get_prerequisites_status() -> dict[str, object]:
+    return prerequisites_status()
 
 
 @app.get("/api/walkthrough/status")

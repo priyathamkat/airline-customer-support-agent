@@ -115,6 +115,44 @@ def common_init_step(relai_dir: Path) -> WalkthroughStep:
     )
 
 
+def setup_step(config_path: Path | None = None) -> WalkthroughStep:
+    path = config_path or (Path.home() / ".relai" / "config.toml")
+    return WalkthroughStep(
+        id="setup",
+        kind="command",
+        title="Set up RELAI",
+        command="relai setup",
+        artifact_paths=["~/.relai/config.toml"],
+        succeeded=path.exists(),
+        next_action="Configure your RELAI API key and CLI preferences. This is a one-time, machine-level step.",
+    )
+
+
+def serialize_step(step: WalkthroughStep) -> dict[str, object]:
+    return {
+        "id": step.id,
+        "kind": step.kind,
+        "title": step.title,
+        "command": step.command,
+        "artifactPaths": step.artifact_paths,
+        "succeeded": step.succeeded,
+        "nextAction": step.next_action,
+    }
+
+
+def prerequisites_status(
+    project_root: Path | None = None,
+    config_path: Path | None = None,
+) -> dict[str, object]:
+    root = (project_root or Path.cwd()).resolve()
+    setup = setup_step(config_path)
+    init = common_init_step(root / ".relai")
+    return {
+        "ready": setup.succeeded and init.succeeded,
+        "steps": [serialize_step(setup), serialize_step(init)],
+    }
+
+
 def relai_artifact_steps(
     relai_dir: Path,
     track: LearningTrack,

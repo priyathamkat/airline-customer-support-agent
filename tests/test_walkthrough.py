@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from airline_support.walkthrough import LOG_TRACK_ID, normalize_env_name, walkthrough_status
+from airline_support.walkthrough import (
+    LOG_TRACK_ID,
+    normalize_env_name,
+    prerequisites_status,
+    walkthrough_status,
+)
 
 
 def test_prompt_track_commands_and_artifacts(tmp_path):
@@ -70,3 +75,27 @@ def test_log_track_artifacts_use_track_env_name(tmp_path):
 
 def test_env_name_is_shell_safe_slug():
     assert normalize_env_name("Airline Support Policy!") == "airline-support-policy"
+
+
+def test_prerequisites_status(tmp_path):
+    config_path = tmp_path / "home" / ".relai" / "config.toml"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    status = prerequisites_status(project_root=project_root, config_path=config_path)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert [step["id"] for step in status["steps"]] == ["setup", "init"]
+    assert status["ready"] is False
+    assert steps["setup"]["succeeded"] is False
+    assert steps["setup"]["command"] == "relai setup"
+    assert steps["init"]["succeeded"] is False
+
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("", encoding="utf-8")
+    (project_root / ".relai" / "simulator").mkdir(parents=True)
+    (project_root / ".relai" / "learning-env-context.json").write_text("{}", encoding="utf-8")
+
+    ready_status = prerequisites_status(project_root=project_root, config_path=config_path)
+    assert ready_status["ready"] is True
+    assert all(step["succeeded"] for step in ready_status["steps"])

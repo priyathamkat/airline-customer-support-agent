@@ -45,6 +45,7 @@ import {
   TooltipTrigger
 } from "@/components/ui/tooltip";
 import { GuidedTour, type TourStep } from "@/components/tour";
+import { SetupGate } from "@/components/setup-gate";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "assistant";
@@ -81,6 +82,11 @@ type LearningTrack = {
   defaultPrompt: string;
   defaultFeedback: string;
   scenarioPrompt: string | null;
+};
+
+type PrerequisitesStatus = {
+  ready: boolean;
+  steps: WalkthroughStep[];
 };
 
 type WalkthroughStatus = {
@@ -198,13 +204,26 @@ export default function Home() {
   const [copiedStepId, setCopiedStepId] = useState<string | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
+  const [tourSeen, setTourSeen] = useState(false);
+  const [prereq, setPrereq] = useState<PrerequisitesStatus | null>(null);
+  const [gateEngaged, setGateEngaged] = useState(false);
+  const [gateDismissed, setGateDismissed] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const pollInFlightRef = useRef(false);
+  const prereqPollInFlightRef = useRef(false);
   const tourInitedRef = useRef(false);
 
   function closeTour() {
     window.localStorage.setItem(TOUR_SEEN_STORAGE_KEY, "1");
+    setTourSeen(true);
     setTourOpen(false);
+  }
+
+  function continueFromGate() {
+    setGateDismissed(true);
+    if (!tourSeen) {
+      setTourOpen(true);
+    }
   }
 
   function toggleHistory() {
@@ -224,10 +243,26 @@ export default function Home() {
     ? 100
     : Math.round((Math.min(activeStepIndex, totalSteps) / totalSteps) * 100);
 
+  // Blocking welcome gate: shown first, until `relai setup` + `relai init` are done. The tour
+  // starts only after the gate is dismissed. `gateEngaged` latches once the gate first appears so
+  // the success state stays visible until the user clicks through; an already-set-up user (ready on
+  // load) never engages it and goes straight to the tour.
+  const showGate = (gateEngaged || Boolean(prereq && !prereq.ready)) && !gateDismissed;
+
   const activeStepRef = useRef(activeStep);
   activeStepRef.current = activeStep;
   const activeStepIndexRef = useRef(activeStepIndex);
   activeStepIndexRef.current = activeStepIndex;
+
+  const refreshPrerequisites = useCallback(async (): Promise<PrerequisitesStatus | null> => {
+    const response = await fetch(`${API_BASE_URL}/api/prerequisites/status`, { cache: "no-store" });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as PrerequisitesStatus;
+    setPrereq(payload);
+    return payload;
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     const response = await fetch(`${API_BASE_URL}/api/sessions`, { cache: "no-store" });
@@ -292,6 +327,7 @@ export default function Home() {
       }
     }
     setHistoryCollapsed(window.localStorage.getItem(HISTORY_COLLAPSED_STORAGE_KEY) === "1");
+    setTourSeen(window.localStorage.getItem(TOUR_SEEN_STORAGE_KEY) === "1");
   }, []);
 
   useEffect(() => {
@@ -303,19 +339,59 @@ export default function Home() {
   }, [refreshWalkthrough]);
 
   useEffect(() => {
+    void refreshPrerequisites();
+  }, [refreshPrerequisites]);
+
+  // Latch the gate open once it first becomes relevant (so the success state can persist).
+  useEffect(() => {
+    if (prereq && !prereq.ready && !gateDismissed) {
+      setGateEngaged(true);
+    }
+  }, [prereq, gateDismissed]);
+
+  // Poll the prerequisite status while the gate is up (until ready) so it advances automatically.
+  useEffect(() => {
+    if (!showGate || prereq?.ready) {
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      if (prereqPollInFlightRef.current) {
+        return;
+      }
+      prereqPollInFlightRef.current = true;
+      try {
+        await refreshPrerequisites();
+      } finally {
+        prereqPollInFlightRef.current = false;
+      }
+      if (cancelled) {
+        return;
+      }
+    };
+    const intervalId = window.setInterval(tick, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [showGate, prereq?.ready, refreshPrerequisites]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
-  // Auto-open the guided tour once, after the walkthrough loads so all anchors exist.
+  // Decide the first-load flow once both the walkthrough and prerequisite state are known.
+  // If prerequisites are already met, the welcome gate won't show, so open the tour directly.
+  // Otherwise the gate appears first and its "Start the tour" button opens the tour.
   useEffect(() => {
-    if (tourInitedRef.current || !walkthrough) {
+    if (tourInitedRef.current || !walkthrough || !prereq) {
       return;
     }
     tourInitedRef.current = true;
-    if (window.localStorage.getItem(TOUR_SEEN_STORAGE_KEY) !== "1") {
+    if (!tourSeen && prereq.ready) {
       setTourOpen(true);
     }
-  }, [walkthrough]);
+  }, [walkthrough, prereq, tourSeen]);
 
   function setStoredStepIndex(index: number, trackId = selectedTrackId) {
     setActiveStepIndex(index);
@@ -327,6 +403,7 @@ export default function Home() {
     activeStep &&
       !walkthroughComplete &&
       !isStreaming &&
+      !showGate &&
       !activeStep.succeeded &&
       (activeStep.kind === "command" || (activeStep.kind === "chat" && scenarioSessionId))
   );
@@ -949,6 +1026,15 @@ export default function Home() {
       </aside>
 
       <GuidedTour open={tourOpen} steps={TOUR_STEPS} onClose={closeTour} />
+
+      {showGate && prereq ? (
+        <SetupGate
+          steps={prereq.steps}
+          ready={prereq.ready}
+          onContinue={continueFromGate}
+          continueLabel={tourSeen ? "Get started" : "Start the tour"}
+        />
+      ) : null}
     </main>
   );
 }
