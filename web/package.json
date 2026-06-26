@@ -8,15 +8,28 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@radix-ui/react-scroll-area": "latest",
+    "@radix-ui/react-select": "^2.3.1",
+    "@radix-ui/react-separator": "latest",
+    "@radix-ui/react-slot": "latest",
+    "@radix-ui/react-tabs": "latest",
+    "@radix-ui/react-tooltip": "latest",
+    "class-variance-authority": "latest",
+    "clsx": "latest",
     "lucide-react": "latest",
     "next": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "sonner": "latest",
+    "tailwind-merge": "latest"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "tailwindcss": "latest",
+    "tw-animate-css": "latest",
     "typescript": "latest"
   },
   "overrides": {

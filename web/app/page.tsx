@@ -2,17 +2,50 @@
 
 import {
   AlertCircle,
+  ArrowRight,
   Check,
-  Clipboard,
+  CircleHelp,
+  ClipboardCheck,
+  Copy,
   Loader2,
-  Plane,
-  Play,
+  MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Send,
-  Terminal,
-  XCircle
+  Sparkles,
+  Terminal
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from "@/components/ui/tooltip";
+import { GuidedTour, type TourStep } from "@/components/tour";
+import { cn } from "@/lib/utils";
 
 type Role = "user" | "assistant";
 
@@ -78,6 +111,43 @@ const DEFAULT_LOG_ENV_NAME = "off-topic-guardrail";
 const TRACK_STORAGE_KEY = "relai-airline-learning-track";
 const WALKTHROUGH_STEP_STORAGE_PREFIX = "relai-airline-learning-track-step";
 const TRACK_SESSION_STORAGE_PREFIX = "relai-airline-learning-track-session";
+const HISTORY_COLLAPSED_STORAGE_KEY = "relai-history-collapsed";
+const TOUR_SEEN_STORAGE_KEY = "relai-tour-seen";
+
+const TOUR_STEPS: TourStep[] = [
+  {
+    selector: '[data-tour="chat"]',
+    placement: "center",
+    title: "Chat with the support agent",
+    body: "This is an airline customer support agent. Talk to it here to see how it responds — it's the agent you'll be testing and improving."
+  },
+  {
+    selector: '[data-tour="tracks"]',
+    placement: "left",
+    title: "Pick a learning track",
+    body: "Each learning track is a short, guided lesson that walks you through one RELAI feature from start to finish. Switch tracks from this menu."
+  },
+  {
+    selector: '[data-tour="step"]',
+    placement: "left",
+    title: "Follow one step at a time",
+    body: "For each step, copy the command and run it in your terminal. The app watches for the result and moves you forward automatically — no clicking needed."
+  },
+  {
+    selector: '[data-tour="progress"]',
+    placement: "left",
+    title: "Track your progress",
+    body: "See how many steps you've completed in the current learning track."
+  },
+  {
+    selector: '[data-tour="history"]',
+    placement: "right",
+    title: "Your chat sessions",
+    body: "Every conversation is saved here. Start a new session or reopen an earlier one anytime."
+  }
+];
+
+const POLL_INTERVAL_MS = 2500;
 
 function stepStorageKey(trackId: string) {
   return `${WALKTHROUGH_STEP_STORAGE_PREFIX}:${trackId}`;
@@ -110,38 +180,6 @@ function parseSseEvent(raw: string): { event: string; data: unknown } | null {
   return { event: eventLine.slice(7), data: JSON.parse(data) };
 }
 
-function statusLabel(step: WalkthroughStep, localStatus?: LocalStepStatus) {
-  if (step.succeeded) {
-    return "Succeeded";
-  }
-  if (localStatus === "waiting") {
-    return "Waiting";
-  }
-  if (localStatus === "checking") {
-    return "Checking";
-  }
-  if (localStatus === "failed") {
-    return "Failed";
-  }
-  return "Ready";
-}
-
-function statusIcon(step: WalkthroughStep, localStatus?: LocalStepStatus) {
-  if (step.succeeded) {
-    return <Check aria-hidden="true" />;
-  }
-  if (localStatus === "checking") {
-    return <Loader2 aria-hidden="true" className="spin" />;
-  }
-  if (localStatus === "failed") {
-    return <XCircle aria-hidden="true" />;
-  }
-  if (localStatus === "waiting") {
-    return <Terminal aria-hidden="true" />;
-  }
-  return <Play aria-hidden="true" />;
-}
-
 export default function Home() {
   const [selectedTrackId, setSelectedTrackId] = useState(DEFAULT_TRACK_ID);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -158,11 +196,38 @@ export default function Home() {
   const [stepStatuses, setStepStatuses] = useState<Record<string, LocalStepStatus>>({});
   const [activeStepIndex, setActiveStepIndex] = useState(0);
   const [copiedStepId, setCopiedStepId] = useState<string | null>(null);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const pollInFlightRef = useRef(false);
+  const tourInitedRef = useRef(false);
+
+  function closeTour() {
+    window.localStorage.setItem(TOUR_SEEN_STORAGE_KEY, "1");
+    setTourOpen(false);
+  }
+
+  function toggleHistory() {
+    setHistoryCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem(HISTORY_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+      return next;
+    });
+  }
 
   const activeStep = walkthrough?.steps[activeStepIndex] ?? null;
   const walkthroughComplete = Boolean(walkthrough && activeStepIndex >= walkthrough.steps.length);
   const completedStepCount = walkthrough?.steps.filter((step) => step.succeeded).length ?? 0;
+  const totalSteps = walkthrough?.steps.length ?? 1;
+  const currentStepNumber = Math.min(activeStepIndex + 1, totalSteps);
+  const progressPercent = walkthroughComplete
+    ? 100
+    : Math.round((Math.min(activeStepIndex, totalSteps) / totalSteps) * 100);
+
+  const activeStepRef = useRef(activeStep);
+  activeStepRef.current = activeStep;
+  const activeStepIndexRef = useRef(activeStepIndex);
+  activeStepIndexRef.current = activeStepIndex;
 
   const refreshSessions = useCallback(async () => {
     const response = await fetch(`${API_BASE_URL}/api/sessions`, { cache: "no-store" });
@@ -226,6 +291,7 @@ export default function Home() {
         setActiveStepIndex(parsedIndex);
       }
     }
+    setHistoryCollapsed(window.localStorage.getItem(HISTORY_COLLAPSED_STORAGE_KEY) === "1");
   }, []);
 
   useEffect(() => {
@@ -239,6 +305,75 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  // Auto-open the guided tour once, after the walkthrough loads so all anchors exist.
+  useEffect(() => {
+    if (tourInitedRef.current || !walkthrough) {
+      return;
+    }
+    tourInitedRef.current = true;
+    if (window.localStorage.getItem(TOUR_SEEN_STORAGE_KEY) !== "1") {
+      setTourOpen(true);
+    }
+  }, [walkthrough]);
+
+  function setStoredStepIndex(index: number, trackId = selectedTrackId) {
+    setActiveStepIndex(index);
+    window.localStorage.setItem(stepStorageKey(trackId), String(index));
+  }
+
+  // Whether the active step can be auto-detected by polling the backend.
+  const canPoll = Boolean(
+    activeStep &&
+      !walkthroughComplete &&
+      !isStreaming &&
+      !activeStep.succeeded &&
+      (activeStep.kind === "command" || (activeStep.kind === "chat" && scenarioSessionId))
+  );
+
+  // Auto-detect: while waiting on a command/log artifact, poll the backend and
+  // advance the moment the artifact appears — no clicking required.
+  useEffect(() => {
+    if (!canPoll) {
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      if (pollInFlightRef.current) {
+        return;
+      }
+      pollInFlightRef.current = true;
+      try {
+        const step = activeStepRef.current;
+        if (!step) {
+          return;
+        }
+        const status = await refreshWalkthrough();
+        if (cancelled || !status) {
+          return;
+        }
+        const fresh = status.steps.find((candidate) => candidate.id === step.id);
+        if (step.id === "init" && !fresh) {
+          toast.success("RELAI initialized", { description: "Moving on to the next step." });
+          setStoredStepIndex(0);
+          return;
+        }
+        if (fresh?.succeeded) {
+          const idx = status.steps.findIndex((candidate) => candidate.id === step.id);
+          toast.success("Command ran successfully", { description: `"${step.title}" is complete.` });
+          setStoredStepIndex((idx >= 0 ? idx : activeStepIndexRef.current) + 1);
+        }
+      } finally {
+        pollInFlightRef.current = false;
+      }
+    };
+    const intervalId = window.setInterval(tick, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canPoll, refreshWalkthrough]);
 
   async function startSession(resetMessages = true) {
     const response = await fetch(`${API_BASE_URL}/api/sessions`, { method: "POST" });
@@ -360,26 +495,10 @@ export default function Home() {
     await navigator.clipboard.writeText(step.command);
     setCopiedStepId(step.id);
     setStepStatuses((current) => ({ ...current, [step.id]: "waiting" }));
-    window.setTimeout(() => setCopiedStepId(null), 1400);
-  }
-
-  function setStoredStepIndex(index: number, trackId = selectedTrackId) {
-    setActiveStepIndex(index);
-    window.localStorage.setItem(stepStorageKey(trackId), String(index));
-  }
-
-  async function checkAndContinue(step: WalkthroughStep) {
-    const status = await refreshWalkthrough(step.id);
-    const checkedStep = status?.steps.find((candidate) => candidate.id === step.id);
-    if (step.id === "init" && status && !checkedStep) {
-      setStoredStepIndex(0);
-      return;
-    }
-    if (!checkedStep?.succeeded) {
-      return;
-    }
-    const checkedStepIndex = status?.steps.findIndex((candidate) => candidate.id === step.id) ?? activeStepIndex;
-    setStoredStepIndex(checkedStepIndex + 1);
+    toast.success("Command copied", {
+      description: "Paste and run it in your terminal — we'll detect it automatically."
+    });
+    window.setTimeout(() => setCopiedStepId(null), 1600);
   }
 
   function resetWalkthrough() {
@@ -418,57 +537,84 @@ export default function Home() {
     const checkedStep = status?.steps.find((candidate) => candidate.id === step.id);
     if (checkedStep?.succeeded) {
       const checkedStepIndex = status?.steps.findIndex((candidate) => candidate.id === step.id) ?? activeStepIndex;
+      toast.success("Scenario captured", { description: "Session log saved as the learning source." });
       setStoredStepIndex(checkedStepIndex + 1);
     }
   }
 
+  const localStatus = activeStep ? stepStatuses[activeStep.id] : undefined;
+  const verifyState: "detected" | "checking" | "watching" | "failed" | "idle" = useMemo(() => {
+    if (!activeStep) return "idle";
+    if (activeStep.succeeded) return "detected";
+    if (localStatus === "checking") return "checking";
+    if (canPoll) return "watching";
+    if (localStatus === "failed") return "failed";
+    return "idle";
+  }, [activeStep, localStatus, canPoll]);
+
   return (
-    <main className="shell">
-      <section className="walkthrough" aria-label="RELAI walkthrough">
-        <div className="brand">
-          <span className="brandMark">
-            <Plane aria-hidden="true" />
-          </span>
-          <div>
-            <h1>Learning Tracks</h1>
-            <p>Python SDK RELAI loop</p>
-          </div>
+    <main
+      className={cn(
+        "grid h-screen grid-rows-[auto_1fr] overflow-hidden lg:grid-rows-1",
+        historyCollapsed
+          ? "lg:grid-cols-[3.25rem_minmax(420px,1fr)_minmax(360px,440px)]"
+          : "lg:grid-cols-[clamp(240px,20vw,300px)_minmax(420px,1fr)_minmax(360px,440px)]"
+      )}
+    >
+      {/* Right column — learning tracks / walkthrough */}
+      <section
+        className="flex min-h-0 flex-col overflow-y-auto border-b border-border bg-card/40 p-6 lg:order-3 lg:border-b-0 lg:border-l"
+        aria-label="RELAI walkthrough"
+      >
+        <div data-tour="tracks">
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            Learning Tracks
+          </p>
+          <Select
+            value={selectedTrackId}
+            onValueChange={(value) => {
+              const track = walkthrough?.tracks.find((candidate) => candidate.id === value);
+              if (track) {
+                selectTrack(track);
+              }
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a learning track" />
+            </SelectTrigger>
+            <SelectContent>
+              {walkthrough?.tracks.map((track) => (
+                <SelectItem key={track.id} value={track.id}>
+                  {track.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="trackList" aria-label="Learning track selector">
-          {walkthrough?.tracks.map((track) => (
-            <button
-              className={`trackCard ${track.id === selectedTrackId ? "selected" : ""}`}
-              key={track.id}
-              type="button"
-              onClick={() => selectTrack(track)}
-            >
-              <span>{track.title}</span>
-              <small>{track.objective}</small>
-            </button>
-          ))}
-        </div>
+        {walkthrough?.selectedTrack ? (
+          <p className="mt-3 mb-5 text-[13px] leading-relaxed text-muted-foreground">
+            {walkthrough.selectedTrack.objective}
+          </p>
+        ) : null}
 
-        <div className="progressMeter">
-          <span>
-            Step {Math.min(activeStepIndex + 1, walkthrough?.steps.length ?? 1)} of{" "}
-            {walkthrough?.steps.length ?? 1}
-          </span>
-          <strong>{completedStepCount} completed</strong>
-        </div>
-
+        {/* Editable fields for the active step */}
         {activeStep && activeStep.id !== "init" ? (
-          <>
+          <div className="mb-4 grid gap-4">
             {activeStep.kind === "command" ? (
-              <div className="fieldGroup">
-                <label htmlFor="envName">Environment name</label>
-                <input id="envName" value={envName} onChange={(event) => setEnvName(event.target.value)} />
+              <div className="grid gap-2">
+                <label htmlFor="envName" className="text-sm font-medium">
+                  Environment name
+                </label>
+                <Input id="envName" value={envName} onChange={(event) => setEnvName(event.target.value)} />
               </div>
             ) : null}
             {activeStep.id.endsWith(":learning-env") && selectedTrackId === DEFAULT_TRACK_ID ? (
-              <div className="fieldGroup">
-                <label htmlFor="prompt">Learning prompt</label>
-                <textarea
+              <div className="grid gap-2">
+                <label htmlFor="prompt" className="text-sm font-medium">
+                  Learning prompt
+                </label>
+                <Textarea
                   id="prompt"
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
@@ -477,9 +623,11 @@ export default function Home() {
               </div>
             ) : null}
             {activeStep.id.endsWith(":learning-env") && selectedTrackId === LOG_TRACK_ID ? (
-              <div className="fieldGroup">
-                <label htmlFor="feedback">Feedback</label>
-                <textarea
+              <div className="grid gap-2">
+                <label htmlFor="feedback" className="text-sm font-medium">
+                  Feedback
+                </label>
+                <Textarea
                   id="feedback"
                   value={feedback}
                   onChange={(event) => setFeedback(event.target.value)}
@@ -487,175 +635,360 @@ export default function Home() {
                 />
               </div>
             ) : null}
-          </>
+          </div>
         ) : null}
 
+        {/* Active step / completion */}
         {walkthroughComplete ? (
-          <article className="completionPanel">
-            <div className="stepStatus succeeded">
-              <Check aria-hidden="true" />
-            </div>
-            <div>
-              <h2>Walkthrough complete</h2>
-              <p>The RELAI init, learning environment, simulation, and optimization steps have finished.</p>
-            </div>
-            <button className="secondaryButton" type="button" onClick={resetWalkthrough}>
-              Start again
-            </button>
-          </article>
-        ) : activeStep ? (
-          <article className="step active">
-            <div className={`stepStatus ${statusLabel(activeStep, stepStatuses[activeStep.id]).toLowerCase()}`}>
-              {statusIcon(activeStep, stepStatuses[activeStep.id])}
-            </div>
-            <div className="stepBody">
-              <div className="stepHeader">
-                <span>{activeStepIndex + 1}</span>
-                <h2>{activeStep.title}</h2>
-                <strong>{statusLabel(activeStep, stepStatuses[activeStep.id])}</strong>
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-muted text-[color:var(--success)]">
+                  <Sparkles className="size-4.5" />
+                </div>
+                <div>
+                  <CardTitle className="text-base">Walkthrough complete</CardTitle>
+                  <CardDescription>Init, learning environment, simulation, and optimization are done.</CardDescription>
+                </div>
               </div>
-              <p>{activeStep.nextAction}</p>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full" onClick={resetWalkthrough}>
+                <RotateCcw />
+                Start again
+              </Button>
+            </CardContent>
+          </Card>
+        ) : activeStep ? (
+          <Card className="gap-4 py-5" data-tour="step">
+            <CardHeader>
+              <div className="flex items-start gap-3">
+                <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-xs font-medium text-muted-foreground">
+                  {currentStepNumber}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <CardTitle className="text-[15px]">{activeStep.title}</CardTitle>
+                  <CardDescription className="mt-1 leading-relaxed">{activeStep.nextAction}</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="grid gap-4">
               {activeStep.kind === "chat" && walkthrough?.selectedTrack.scenarioPrompt ? (
-                <div className="scenarioPrompt">
-                  <span>Scenario prompt</span>
-                  <p>{walkthrough.selectedTrack.scenarioPrompt}</p>
+                <div className="rounded-lg border border-border bg-muted/50 p-3">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Scenario prompt
+                  </p>
+                  <p className="mt-1.5 text-sm">{walkthrough.selectedTrack.scenarioPrompt}</p>
                 </div>
               ) : null}
-              {activeStep.command ? <code>{activeStep.command}</code> : null}
-              <div className="artifactList">
-                {activeStep.artifactPaths.map((path) => (
-                  <span key={path}>{path}</span>
-                ))}
-              </div>
-              <div className="stepActions">
-                {activeStep.command ? (
-                  <button
-                    className="iconButton"
-                    title="Copy command"
-                    type="button"
-                    onClick={() => void copyCommand(activeStep)}
-                  >
-                    {copiedStepId === activeStep.id ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}
-                  </button>
-                ) : null}
-                {activeStep.kind === "chat" ? (
-                  <button
-                    className="primaryButton"
-                    type="button"
-                    disabled={isStreaming}
-                    onClick={() => void runScenario(activeStep)}
-                  >
-                    {isStreaming ? <Loader2 aria-hidden="true" className="spin" /> : <Send aria-hidden="true" />}
-                    Run scenario in chat
-                  </button>
-                ) : (
-                  <button
-                    className="primaryButton"
-                    type="button"
-                    onClick={() => void checkAndContinue(activeStep)}
-                  >
-                    <Check aria-hidden="true" />
-                    I finished this step
-                  </button>
-                )}
-                <button
-                  className="ghostButton"
-                  type="button"
-                  onClick={() => void refreshWalkthrough(activeStep.id)}
-                >
-                  <RefreshCw aria-hidden="true" />
-                  Check only
-                </button>
-              </div>
-              {stepStatuses[activeStep.id] === "failed" ? (
-                <p className="stepFailure">
-                  The expected artifact was not found yet. Finish the active step, then check again.
-                </p>
+
+              {activeStep.command ? (
+                <div className="group relative overflow-hidden rounded-lg border border-border bg-[var(--background)]">
+                  <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+                    <Terminal className="size-3.5 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground">Run in your terminal</span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="ml-auto size-7 text-muted-foreground hover:text-foreground"
+                          onClick={() => void copyCommand(activeStep)}
+                        >
+                          {copiedStepId === activeStep.id ? (
+                            <ClipboardCheck className="text-[color:var(--success)]" />
+                          ) : (
+                            <Copy />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Copy command</TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <pre className="overflow-x-auto px-3 py-3 font-mono text-xs leading-relaxed text-foreground/85">
+                    <code>{activeStep.command}</code>
+                  </pre>
+                </div>
               ) : null}
-            </div>
-          </article>
+
+              {/* Live verification status */}
+              <VerifyStatus state={verifyState} kind={activeStep.kind} />
+
+              {activeStep.kind === "chat" ? (
+                <Button className="w-full" disabled={isStreaming} onClick={() => void runScenario(activeStep)}>
+                  {isStreaming ? <Loader2 className="spin" /> : <Send />}
+                  Run scenario in chat
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
         ) : (
-          <button className="secondaryButton" onClick={() => void refreshWalkthrough()} type="button">
-            <RefreshCw aria-hidden="true" />
+          <Button variant="outline" onClick={() => void refreshWalkthrough()}>
+            <RefreshCw />
             Load walkthrough
-          </button>
+          </Button>
         )}
+
+        {/* Progress */}
+        <div className="mt-5" data-tour="progress">
+          <div className="mb-2 flex items-center justify-between text-xs font-medium text-muted-foreground">
+            <span>
+              Step {currentStepNumber} of {totalSteps}
+            </span>
+            <span>{completedStepCount} completed</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
       </section>
 
-      <section className="chatPanel" aria-label="Airline support chat">
-        <div className="panelHeader">
-          <div>
-            <h2>Support chat</h2>
-            <p>{sessionId ?? "No active session"}</p>
+      {/* Center — chat */}
+      <section
+        className="flex min-h-0 flex-col bg-background lg:order-2"
+        aria-label="Airline support chat"
+        data-tour="chat"
+      >
+        <header className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground">
+              <MessageSquare className="size-4.5" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold">Airline Customer Support Agent</h2>
+              <p className="truncate font-mono text-xs text-muted-foreground">{sessionId ?? "No active session"}</p>
+            </div>
           </div>
-          <button className="secondaryButton compact" type="button" onClick={() => void startSession()}>
-            New session
-          </button>
-        </div>
+          <div className="flex items-center gap-1.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8 text-muted-foreground"
+                  onClick={() => setTourOpen(true)}
+                  aria-label="Take a tour"
+                >
+                  <CircleHelp />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Take a tour</TooltipContent>
+            </Tooltip>
+            <Button size="sm" variant="outline" onClick={() => void startSession()}>
+              New session
+            </Button>
+          </div>
+        </header>
 
         {chatError ? (
-          <div className="errorBanner">
-            <AlertCircle aria-hidden="true" />
+          <div className="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-[color:var(--destructive)]">
+            <AlertCircle className="size-4 shrink-0" />
             <span>{chatError}</span>
           </div>
         ) : null}
 
-        <div className="messages">
+        <div className="flex-1 overflow-y-auto px-6 py-6">
           {messages.length === 0 ? (
-            <div className="emptyState">
-              Ask about baggage, seat changes, or booking code <strong>SKY123</strong>.
+            <div className="flex h-full min-h-60 items-center justify-center text-center text-sm text-muted-foreground">
+              <p>
+                Ask about baggage, seat changes, or booking code{" "}
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono font-semibold text-foreground">SKY123</span>.
+              </p>
             </div>
           ) : (
-            messages.map((message, index) => (
-              <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-                <span>{message.role === "user" ? "You" : "Agent"}</span>
-                <p>{message.content || (isStreaming && index === messages.length - 1 ? " " : "")}</p>
-              </div>
-            ))
+            <div className="flex flex-col gap-5">
+              {messages.map((message, index) => {
+                const isLast = index === messages.length - 1;
+                const streamingHere = isStreaming && isLast && message.role === "assistant";
+                return (
+                  <div
+                    key={`${message.role}-${index}`}
+                    className={cn("flex flex-col gap-1.5", message.role === "user" ? "items-end" : "items-start")}
+                  >
+                    <span className="px-1 text-xs font-semibold text-muted-foreground">
+                      {message.role === "user" ? "You" : "Agent"}
+                    </span>
+                    <div
+                      className={cn(
+                        "max-w-[min(680px,86%)] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+                        message.role === "user"
+                          ? "rounded-br-sm bg-secondary text-secondary-foreground"
+                          : "rounded-bl-sm border border-border bg-card text-card-foreground"
+                      )}
+                    >
+                      <span className={cn(streamingHere && !message.content && "caret")}>{message.content}</span>
+                      {streamingHere && message.content ? <span className="caret" /> : null}
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
           )}
-          <div ref={messagesEndRef} />
         </div>
 
-        <form className="composer" onSubmit={(event) => void sendMessage(event)}>
-          <input
+        <form className="flex gap-2 border-t border-border px-6 py-4" onSubmit={(event) => void sendMessage(event)}>
+          <Input
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="Ask the airline support agent..."
+            placeholder="Ask the airline support agent…"
             disabled={isStreaming}
+            className="h-11"
           />
-          <button className="sendButton" type="submit" disabled={isStreaming || !input.trim()} title="Send">
-            {isStreaming ? <Loader2 aria-hidden="true" className="spin" /> : <Send aria-hidden="true" />}
-          </button>
+          <Button type="submit" size="icon" className="size-11" disabled={isStreaming || !input.trim()} title="Send">
+            {isStreaming ? <Loader2 className="spin" /> : <Send />}
+          </Button>
         </form>
       </section>
 
-      <aside className="history" aria-label="Session history">
-        <div className="panelHeader">
-          <div>
-            <h2>History</h2>
-            <p>{sessions.length} local sessions</p>
+      {/* Left column — session history (collapsible) */}
+      <aside
+        className="hidden min-h-0 flex-col border-r border-border bg-card/40 lg:flex lg:order-1"
+        aria-label="Session history"
+        data-tour="history"
+      >
+        {historyCollapsed ? (
+          <div className="flex flex-col items-center gap-2 px-2 py-4">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button size="icon" variant="ghost" className="size-9" onClick={toggleHistory}>
+                  <PanelLeftOpen />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Show history</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button size="icon" variant="ghost" className="size-9" onClick={() => void startSession()}>
+                  <Plus />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">New session</TooltipContent>
+            </Tooltip>
           </div>
-          <button className="iconButton" title="Refresh history" type="button" onClick={() => void refreshSessions()}>
-            <RefreshCw aria-hidden="true" />
-          </button>
-        </div>
-        <div className="sessionList">
-          {sessions.map((session) => (
-            <button
-              className={`sessionItem ${session.id === sessionId ? "selected" : ""}`}
-              key={session.id}
-              type="button"
-              onClick={() => void loadSession(session.id)}
-            >
-              <span>{session.preview}</span>
-              <small>
-                {session.message_count} messages · {new Date(session.updated_at).toLocaleString()}
-              </small>
-            </button>
-          ))}
-          {sessions.length === 0 ? <p className="muted">No saved sessions yet.</p> : null}
-        </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-2 px-3 py-3.5">
+              <div className="flex min-w-0 items-center gap-2.5">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="size-8 shrink-0 rounded-lg object-contain" src="/logo.png" alt="RELAI" />
+                <div className="min-w-0">
+                  <h1 className="truncate text-sm font-semibold leading-tight tracking-tight">RELAI Onboarding</h1>
+                  <p className="truncate text-[11px] text-muted-foreground">Guided RELAI CLI walkthrough</p>
+                </div>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-8 shrink-0 text-muted-foreground"
+                    onClick={toggleHistory}
+                  >
+                    <PanelLeftClose />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Collapse</TooltipContent>
+              </Tooltip>
+            </div>
+
+            <div className="px-3 pb-2">
+              <Button variant="outline" className="w-full justify-start gap-2" onClick={() => void startSession()}>
+                <Plus className="size-4" />
+                New session
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-between px-4 pt-2 pb-1">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Sessions
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-6 text-muted-foreground"
+                    onClick={() => void refreshSessions()}
+                  >
+                    <RefreshCw className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Refresh</TooltipContent>
+              </Tooltip>
+            </div>
+
+            <ScrollArea className="flex-1">
+              <div className="flex flex-col gap-0.5 px-2 pb-4">
+                {sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => void loadSession(session.id)}
+                    title={session.preview || "New session"}
+                    className={cn(
+                      "truncate rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                      session.id === sessionId
+                        ? "bg-accent font-medium text-accent-foreground"
+                        : "text-foreground/80 hover:bg-accent/60 hover:text-foreground"
+                    )}
+                  >
+                    {session.preview || "New session"}
+                  </button>
+                ))}
+                {sessions.length === 0 ? (
+                  <p className="px-2.5 py-2 text-sm text-muted-foreground">No saved sessions yet.</p>
+                ) : null}
+              </div>
+            </ScrollArea>
+          </>
+        )}
       </aside>
+
+      <GuidedTour open={tourOpen} steps={TOUR_STEPS} onClose={closeTour} />
     </main>
+  );
+}
+
+function VerifyStatus({
+  state,
+  kind
+}: {
+  state: "detected" | "checking" | "watching" | "failed" | "idle";
+  kind: "command" | "chat";
+}) {
+  const base = "flex items-center gap-2 px-0.5 text-sm";
+  if (state === "detected") {
+    return (
+      <div className={cn(base, "text-[color:var(--success)]")}>
+        <Check className="size-4 shrink-0" />
+        <span>Detected — this step ran successfully.</span>
+      </div>
+    );
+  }
+  if (state === "watching" || state === "checking") {
+    return (
+      <div className={cn(base, "text-muted-foreground")}>
+        <Loader2 className="size-4 shrink-0 spin" />
+        <span>Watching for {kind === "chat" ? "the scenario run" : "the command to run"}…</span>
+      </div>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <div className={cn(base, "text-[color:var(--destructive)]")}>
+        <AlertCircle className="size-4 shrink-0" />
+        <span>Not detected yet. Run the {kind === "chat" ? "scenario" : "command"}, then we'll pick it up.</span>
+      </div>
+    );
+  }
+  return (
+    <div className={cn(base, "text-muted-foreground")}>
+      <ArrowRight className="size-4 shrink-0" />
+      <span>{kind === "chat" ? "Run the scenario to capture a log." : "Copy and run the command to continue."}</span>
+    </div>
   );
 }
