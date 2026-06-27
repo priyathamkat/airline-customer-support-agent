@@ -1,0 +1,12 @@
+{
+  "schema_version": "relai.runtime_manifest.v1",
+  "env": [
+    {
+      "name": "OPENAI_API_KEY",
+      "required": true,
+      "sensitive": true,
+      "reason": "Needed by the OpenAI Agents SDK call path used by the airline support agent."
+    }
+  ],
+  "files": []
+}

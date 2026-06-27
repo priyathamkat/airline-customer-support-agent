@@ -1,0 +1,44 @@
+{
+  "schema_version": "relai.learning_env_context.v1",
+  "agent": {
+    "entrypoint": "src/airline_support/agent.py",
+    "runner_summary": "The simulator keeps chat history in memory and passes each new raw string user message through the project's existing streamed agent helper."
+  },
+  "components": [
+    {
+      "id": "lookup_booking",
+      "import_path": "airline_support.agent:lookup_booking",
+      "when_to_use": "Use for isolated booking-lookup regressions where confirmation-code handling or booking summaries are wrong.",
+      "live_mock_targets": [
+        "lookup_booking"
+      ],
+      "required_mock_targets": [],
+      "input_guidance": "Use FixedComponentInput(kwargs={\"confirmation_code\": ...}) with the exact confirmation code observed in the log.",
+      "output_guidance": "Evaluate whether the returned string correctly reports either the booking summary or the missing-booking message."
+    },
+    {
+      "id": "baggage_policy",
+      "import_path": "airline_support.agent:baggage_policy",
+      "when_to_use": "Use for isolated baggage-policy regressions when the issue is the policy text rather than the surrounding chat response.",
+      "live_mock_targets": [
+        "baggage_policy"
+      ],
+      "required_mock_targets": [],
+      "input_guidance": "Use FixedComponentInput(kwargs={\"ticket_type\": ...}) with the ticket type phrase from the scenario, such as \"standard\" or \"basic economy\".",
+      "output_guidance": "Evaluate whether the returned string states the correct baggage allowance for the requested ticket type."
+    }
+  ],
+  "log_notes": [
+    "Agent environments pass FixedTurn.content directly to the adapter as a raw string user message.",
+    "The adapter preserves prior user and assistant turns in order across the run.",
+    "OpenAI Agents SDK tool component targets should use FixedComponentInput(kwargs={...}) with named arguments only."
+  ],
+  "learning_env_guidance": [
+    "Use plain string FixedTurn.content values that match a single chat user message; do not wrap agent inputs in JSON for this project.",
+    "Use FixedInput when exact wording matters, and PersonaInput when user persistence, confusion, or tone matters more than one exact sentence.",
+    "Use LLMJudgeEvaluator for conversational quality and policy-following checks; use CodeEvaluator for deterministic transcript, tool-call, or exact-output checks.",
+    "Prefer component targets for isolated regressions in lookup_booking or baggage_policy instead of a full agent run.",
+    "Use an agent target for seat-change scenarios, and mock change_seat when you need deterministic outcomes because the live tool mutates shared demo booking state.",
+    "When a generated environment needs ModelSpec, prefer provider=\"openai\" so evaluator and persona calls can reuse OPENAI_API_KEY."
+  ]
+}
