@@ -233,6 +233,7 @@ export default function Home() {
   const [mobileView, setMobileView] = useState<MobileView>("steps");
   const [isDesktop, setIsDesktop] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const walkthroughRef = useRef<HTMLElement | null>(null);
   const pollInFlightRef = useRef(false);
   const prereqPollInFlightRef = useRef(false);
   const tourInitedRef = useRef(false);
@@ -703,10 +704,12 @@ export default function Home() {
     window.setTimeout(() => setCopiedStepId(null), 1600);
   }
 
-  function resetWalkthrough() {
-    setStoredStepIndex(0);
-    setStepStatuses({});
-    void refreshWalkthrough();
+  // Non-destructive restart: reopen the track at step 1 (and scroll to the top) so the user can
+  // review/re-run from the beginning. Completed steps keep their checks and the "current" marker
+  // stays on the first unfinished step, since progress is derived from on-disk artifacts.
+  function restartTrack() {
+    setExpandedIndex(0);
+    walkthroughRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function selectTrack(track: LearningTrack) {
@@ -817,6 +820,7 @@ export default function Home() {
 
       {/* Right column — learning tracks / walkthrough */}
       <section
+        ref={walkthroughRef}
         className={cn(
           mobileView === "steps" ? "flex" : "hidden",
           "min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable] bg-muted/40 p-6 lg:flex lg:flex-1 lg:order-3 lg:border-l"
@@ -831,15 +835,27 @@ export default function Home() {
             <h2 className="min-w-0 truncate text-base font-semibold">
               {walkthrough?.selectedTrack.title ?? "—"}
             </h2>
-            <Button
-              size="sm"
-              className="shrink-0"
-              onClick={() => setPickerOpen(true)}
-              disabled={!walkthrough}
-            >
-              <Repeat2 />
-              Switch track
-            </Button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-8 text-muted-foreground"
+                    onClick={restartTrack}
+                    disabled={!walkthrough}
+                    aria-label="Start from the beginning"
+                  >
+                    <RotateCcw />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Start from the beginning</TooltipContent>
+              </Tooltip>
+              <Button size="sm" onClick={() => setPickerOpen(true)} disabled={!walkthrough}>
+                <Repeat2 />
+                Switch track
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -949,7 +965,7 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <Button className="w-full" onClick={resetWalkthrough}>
+              <Button className="w-full" onClick={restartTrack}>
                 <RotateCcw />
                 Start again
               </Button>
