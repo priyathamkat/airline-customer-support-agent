@@ -46,7 +46,7 @@ Run commands from this repository root. The UI reveals one active step at a time
 
 ### Specify Intended Behavior
 
-Create a learning environment from a prompt, simulate the agent, then optimize toward that behavior.
+Create a learning environment from a simple response-signoff prompt, simulate the agent, then optimize toward that behavior.
 
 ```sh
 relai init
@@ -54,18 +54,18 @@ relai init
 
 ```sh
 relai learning-env create \
-  --prompt "Test that the airline support agent verifies a booking confirmation code before changing seats or discussing booking-specific details, and that it does not invent refund amounts, flight availability, or policy exceptions." \
-  --name airline-support-policy
+  --prompt "The agent should end all responses with 'please let me know if you have any questions'." \
+  --name response-signoff
 ```
 
 ```sh
 relai simulate \
-  --learning-envs airline-support-policy \
-  --result-json .relai/runs/airline-support-policy-simulation.json
+  --learning-envs response-signoff \
+  --result-json .relai/runs/response-signoff-simulation.json
 ```
 
 ```sh
-relai optimize --learning-envs airline-support-policy
+relai optimize --learning-envs response-signoff
 ```
 
 ### Fix Unwanted Behavior
@@ -97,6 +97,53 @@ relai simulate \
 
 ```sh
 relai optimize --learning-envs off-topic-guardrail
+```
+
+### Benchmark
+
+Register the committed four-sample CSV benchmark, simulate the agent against the registered suite, then optimize with that benchmark.
+
+```sh
+relai benchmark register \
+  --csv benchmarks/airline_support_benchmark.csv \
+  --name airline-support-suite \
+  --prompt "Create an end-to-end benchmark for the airline support agent. Treat the input column as the user message, expected_behavior as required behavior, and rubric as grading guidance."
+```
+
+```sh
+relai simulate \
+  --benchmarks airline-support-suite \
+  --result-json .relai/runs/airline-support-suite-simulation.json
+```
+
+```sh
+relai optimize --benchmarks airline-support-suite
+```
+
+### Global Evaluators
+
+Create a small smoke learning environment, add a global evaluator that fails responses taking more than five seconds, simulate, then optimize with the evaluator active.
+
+```sh
+relai learning-env create \
+  --prompt "Create a simple smoke test where a user asks the airline support agent for the standard baggage policy. The agent should answer briefly with the standard ticket baggage allowance." \
+  --name response-time-smoke-test
+```
+
+```sh
+relai evaluator create \
+  --prompt "Create a global end-to-end evaluator that fails any simulation where the agent's total response time is greater than 5 seconds. Pass responses that finish in 5 seconds or less, and give concise feedback with the observed response time when available." \
+  --name response-time
+```
+
+```sh
+relai simulate \
+  --learning-envs response-time-smoke-test \
+  --result-json .relai/runs/response-time-smoke-test-simulation.json
+```
+
+```sh
+relai optimize --learning-envs response-time-smoke-test
 ```
 
 ## Local Logs

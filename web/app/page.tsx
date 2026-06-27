@@ -80,6 +80,7 @@ type WalkthroughStep = {
 
 type LearningTrack = {
   id: string;
+  kind: string;
   title: string;
   objective: string;
   defaultEnvName: string;
@@ -112,15 +113,25 @@ type LocalStepStatus = "ready" | "waiting" | "checking" | "failed";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 const DEFAULT_PROMPT =
-  "Test that the airline support agent verifies a booking confirmation code before changing seats or discussing booking-specific details, and that it does not invent refund amounts, flight availability, or policy exceptions.";
+  "The agent should end all responses with 'please let me know if you have any questions'.";
 
 const DEFAULT_FEEDBACK =
   "The agent should not answer off-topic, non-airline questions. It should politely say it can only help with airline booking, baggage, seat, and flight-change questions.";
 
+const DEFAULT_BENCHMARK_PROMPT =
+  "Create an end-to-end benchmark for the airline support agent. Treat the input column as the user message, expected_behavior as required behavior, and rubric as grading guidance.";
+
+const DEFAULT_GLOBAL_EVALUATOR_PROMPT =
+  "Create a global end-to-end evaluator that fails any simulation where the agent's total response time is greater than 5 seconds. Pass responses that finish in 5 seconds or less, and give concise feedback with the observed response time when available.";
+
 const DEFAULT_TRACK_ID = "intended-behavior";
 const LOG_TRACK_ID = "unwanted-behavior";
-const DEFAULT_ENV_NAME = "airline-support-policy";
+const BENCHMARK_TRACK_ID = "benchmark";
+const GLOBAL_EVALUATOR_TRACK_ID = "global-evaluator";
+const DEFAULT_ENV_NAME = "response-signoff";
 const DEFAULT_LOG_ENV_NAME = "off-topic-guardrail";
+const DEFAULT_BENCHMARK_NAME = "airline-support-suite";
+const DEFAULT_GLOBAL_EVALUATOR_ENV_NAME = "response-time-smoke-test";
 const TRACK_STORAGE_KEY = "relai-airline-learning-track";
 const WALKTHROUGH_STEP_STORAGE_PREFIX = "relai-airline-learning-track-step";
 const TRACK_SESSION_STORAGE_PREFIX = "relai-airline-learning-track-session";
@@ -183,11 +194,23 @@ function sessionStorageKey(trackId: string) {
 }
 
 function defaultEnvNameForTrack(trackId: string) {
-  return trackId === LOG_TRACK_ID ? DEFAULT_LOG_ENV_NAME : DEFAULT_ENV_NAME;
+  const defaults: Record<string, string> = {
+    [DEFAULT_TRACK_ID]: DEFAULT_ENV_NAME,
+    [LOG_TRACK_ID]: DEFAULT_LOG_ENV_NAME,
+    [BENCHMARK_TRACK_ID]: DEFAULT_BENCHMARK_NAME,
+    [GLOBAL_EVALUATOR_TRACK_ID]: DEFAULT_GLOBAL_EVALUATOR_ENV_NAME
+  };
+  return defaults[trackId] ?? DEFAULT_ENV_NAME;
 }
 
 function defaultPromptForTrack(trackId: string) {
-  return trackId === LOG_TRACK_ID ? "" : DEFAULT_PROMPT;
+  const defaults: Record<string, string> = {
+    [DEFAULT_TRACK_ID]: DEFAULT_PROMPT,
+    [LOG_TRACK_ID]: "",
+    [BENCHMARK_TRACK_ID]: DEFAULT_BENCHMARK_PROMPT,
+    [GLOBAL_EVALUATOR_TRACK_ID]: DEFAULT_GLOBAL_EVALUATOR_PROMPT
+  };
+  return defaults[trackId] ?? DEFAULT_PROMPT;
 }
 
 function defaultFeedbackForTrack(trackId: string) {
@@ -704,12 +727,43 @@ export default function Home() {
     window.setTimeout(() => setCopiedStepId(null), 1600);
   }
 
-  // Non-destructive restart: reopen the track at step 1 (and scroll to the top) so the user can
-  // review/re-run from the beginning. Completed steps keep their checks and the "current" marker
-  // stays on the first unfinished step, since progress is derived from on-disk artifacts.
-  function restartTrack() {
-    setExpandedIndex(0);
-    walkthroughRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  async function restartTrack() {
+    if (!walkthrough) {
+      return;
+    }
+    const confirmed = window.confirm(
+      "Start this track over? This deletes generated RELAI outputs for this track, including learning environment, benchmark, evaluator, simulation, and optimizer files. Chat logs and RELAI initialization stay in place."
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const params = new URLSearchParams({
+        trackId: selectedTrackId,
+        envName
+      });
+      const response = await fetch(`${API_BASE_URL}/api/walkthrough/outputs?${params}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        throw new Error("Could not delete generated RELAI outputs.");
+      }
+      window.localStorage.setItem(stepStorageKey(selectedTrackId), "0");
+      window.localStorage.removeItem(sessionStorageKey(selectedTrackId));
+      setScenarioSessionId(null);
+      setStepStatuses({});
+      setStoredStepIndex(0);
+      setExpandedIndex(0);
+      walkthroughRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+      await refreshWalkthrough(undefined, null);
+      toast.success("Track reset", {
+        description: "Generated RELAI outputs were deleted. Start again from step 1."
+      });
+    } catch (error) {
+      toast.error("Could not reset track", {
+        description: error instanceof Error ? error.message : "Try again after the backend is running."
+      });
+    }
   }
 
   function selectTrack(track: LearningTrack) {
@@ -842,7 +896,7 @@ export default function Home() {
                     size="icon"
                     variant="ghost"
                     className="size-8 text-muted-foreground"
-                    onClick={restartTrack}
+                    onClick={() => void restartTrack()}
                     disabled={!walkthrough}
                     aria-label="Start from the beginning"
                   >

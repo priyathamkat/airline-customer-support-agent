@@ -21,6 +21,7 @@ from airline_support.sessions import (
 from airline_support.walkthrough import (
     PROMPT_TRACK_ID,
     prerequisites_status,
+    reset_track_outputs,
     walkthrough_status,
 )
 
@@ -131,4 +132,15 @@ def get_walkthrough_status(
         prompt=prompt,
         feedback=feedback,
         session_id=session_id,
+    )
+
+
+@app.delete("/api/walkthrough/outputs")
+def delete_walkthrough_outputs(
+    track_id: str = Query(default=PROMPT_TRACK_ID, alias="trackId"),
+    env_name: str | None = Query(default=None, alias="envName"),
+) -> dict[str, object]:
+    return reset_track_outputs(
+        track_id=track_id,
+        env_name=env_name,
     )

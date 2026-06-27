@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,18 +11,41 @@ from airline_support.sessions import validate_session_id
 
 PROMPT_TRACK_ID = "intended-behavior"
 LOG_TRACK_ID = "unwanted-behavior"
+BENCHMARK_TRACK_ID = "benchmark"
+GLOBAL_EVALUATOR_TRACK_ID = "global-evaluator"
 
-DEFAULT_ENV_NAME = "airline-support-policy"
+PROMPT_TRACK_KIND = "prompt-learning-env"
+LOG_TRACK_KIND = "log-feedback-learning-env"
+BENCHMARK_TRACK_KIND = "benchmark"
+GLOBAL_EVALUATOR_TRACK_KIND = "global-evaluator"
+
+DEFAULT_ENV_NAME = "response-signoff"
 DEFAULT_LOG_ENV_NAME = "off-topic-guardrail"
+DEFAULT_BENCHMARK_NAME = "airline-support-suite"
+DEFAULT_GLOBAL_EVALUATOR_NAME = "response-time"
+DEFAULT_GLOBAL_EVALUATOR_ENV_NAME = "response-time-smoke-test"
+
 DEFAULT_PROMPT = (
-    "Test that the airline support agent verifies a booking confirmation code before "
-    "changing seats or discussing booking-specific details, and that it does not invent "
-    "refund amounts, flight availability, or policy exceptions."
+    "The agent should end all responses with "
+    "'please let me know if you have any questions'."
 )
 DEFAULT_OFF_TOPIC_PROMPT = "Can you write a chocolate chip cookie recipe?"
 DEFAULT_FEEDBACK = (
     "The agent should not answer off-topic, non-airline questions. It should politely say "
     "it can only help with airline booking, baggage, seat, and flight-change questions."
+)
+DEFAULT_BENCHMARK_PROMPT = (
+    "Create an end-to-end benchmark for the airline support agent. Treat the input column "
+    "as the user message, expected_behavior as required behavior, and rubric as grading guidance."
+)
+DEFAULT_GLOBAL_EVALUATOR_PROMPT = (
+    "Create a global end-to-end evaluator that fails any simulation where the agent's total "
+    "response time is greater than 5 seconds. Pass responses that finish in 5 seconds or less, "
+    "and give concise feedback with the observed response time when available."
+)
+DEFAULT_GLOBAL_EVALUATOR_SMOKE_PROMPT = (
+    "Create a simple smoke test where a user asks the airline support agent for the standard "
+    "baggage policy. The agent should answer briefly with the standard ticket baggage allowance."
 )
 
 ENV_NAME_PATTERN = re.compile(r"[^a-z0-9-]+")
@@ -30,6 +54,7 @@ ENV_NAME_PATTERN = re.compile(r"[^a-z0-9-]+")
 @dataclass(frozen=True)
 class LearningTrack:
     id: str
+    kind: str
     title: str
     objective: str
     default_env_name: str
@@ -54,22 +79,26 @@ class WalkthroughStep:
 TRACKS: tuple[LearningTrack, ...] = (
     LearningTrack(
         id=PROMPT_TRACK_ID,
+        kind=PROMPT_TRACK_KIND,
         title="Specify Intended Behavior",
-        objective="Create a learning environment from a prompt, simulate the agent, then optimize toward that behavior.",
+        objective=(
+            "Create a learning environment for a required response signoff, simulate the agent, "
+            "then optimize toward that behavior."
+        ),
         default_env_name=DEFAULT_ENV_NAME,
         default_prompt=DEFAULT_PROMPT,
         default_feedback="",
         summary=(
-            "Turn a plain-English description of how the agent should behave into a learning "
-            "environment, measure the current agent against it, then optimize toward that behavior."
+            "Turn one simple plain-English behavior into a learning environment, measure the current "
+            "agent against it, then optimize toward that behavior."
         ),
         use_case=(
-            "Use when you have a target behavior or policy in mind and want the agent to follow it "
-            "reliably."
+            "Use when you have a target behavior in mind and want the agent to follow it reliably."
         ),
     ),
     LearningTrack(
         id=LOG_TRACK_ID,
+        kind=LOG_TRACK_KIND,
         title="Fix Unwanted Behavior",
         objective="Capture a bad run, turn the log plus feedback into a learning environment, then optimize away from it.",
         default_env_name=DEFAULT_LOG_ENV_NAME,
@@ -81,6 +110,43 @@ TRACKS: tuple[LearningTrack, ...] = (
             "environment, then optimize the unwanted behavior away."
         ),
         use_case="Use when the agent did something wrong and you want to stop it from happening again.",
+    ),
+    LearningTrack(
+        id=BENCHMARK_TRACK_ID,
+        kind=BENCHMARK_TRACK_KIND,
+        title="Benchmark",
+        objective=(
+            "Register a small CSV benchmark, simulate the agent against it, then optimize with "
+            "that benchmark."
+        ),
+        default_env_name=DEFAULT_BENCHMARK_NAME,
+        default_prompt=DEFAULT_BENCHMARK_PROMPT,
+        default_feedback="",
+        summary=(
+            "Register a reusable CSV-backed benchmark for several airline support cases, then run "
+            "simulation and optimization against it."
+        ),
+        use_case="Use when you have a small suite of examples that should be rerun together.",
+    ),
+    LearningTrack(
+        id=GLOBAL_EVALUATOR_TRACK_ID,
+        kind=GLOBAL_EVALUATOR_TRACK_KIND,
+        title="Global Evaluators",
+        objective=(
+            "Create a response-time global evaluator, run it with a smoke test, then optimize "
+            "with that evaluator active."
+        ),
+        default_env_name=DEFAULT_GLOBAL_EVALUATOR_ENV_NAME,
+        default_prompt=DEFAULT_GLOBAL_EVALUATOR_PROMPT,
+        default_feedback="",
+        summary=(
+            "Create one evaluator that applies across simulations for the agent, using a 5-second "
+            "response-time threshold as the example."
+        ),
+        use_case=(
+            "Use when one scoring rule should apply globally instead of living in a single "
+            "learning environment."
+        ),
     ),
 )
 
@@ -155,6 +221,21 @@ def serialize_step(step: WalkthroughStep) -> dict[str, object]:
     }
 
 
+def serialize_track(track: LearningTrack) -> dict[str, object]:
+    return {
+        "id": track.id,
+        "kind": track.kind,
+        "title": track.title,
+        "objective": track.objective,
+        "defaultEnvName": track.default_env_name,
+        "defaultPrompt": track.default_prompt,
+        "defaultFeedback": track.default_feedback,
+        "scenarioPrompt": track.scenario_prompt,
+        "summary": track.summary,
+        "useCase": track.use_case,
+    }
+
+
 def prerequisites_status(
     project_root: Path | None = None,
     config_path: Path | None = None,
@@ -221,6 +302,185 @@ def relai_artifact_steps(
     ]
 
 
+def benchmark_artifact_steps(
+    relai_dir: Path,
+    track: LearningTrack,
+    benchmark_name: str,
+    prompt: str,
+) -> list[WalkthroughStep]:
+    benchmark_path = relai_dir / "benchmarks" / f"{benchmark_name}.py"
+    simulation_result_path = relai_dir / "runs" / f"{benchmark_name}-simulation.json"
+    optimizer_scope_path = relai_dir / "optimizer-scope.json"
+    optimizer_runs_dir = relai_dir / "optimizer_runs"
+    optimizer_state_dir = relai_dir / "optimizer-state"
+
+    return [
+        WalkthroughStep(
+            id=f"{track.id}:register",
+            kind="command",
+            title="Register benchmark",
+            command=(
+                "relai benchmark register "
+                "--csv benchmarks/airline_support_benchmark.csv "
+                f"--name {quote_shell(benchmark_name)} "
+                f"--prompt {quote_shell(prompt)}"
+            ),
+            artifact_paths=[f".relai/benchmarks/{benchmark_name}.py"],
+            succeeded=benchmark_path.exists(),
+            next_action="Run this to register the CSV-backed benchmark with RELAI.",
+        ),
+        WalkthroughStep(
+            id=f"{track.id}:simulate",
+            kind="command",
+            title="Simulate",
+            command=(
+                f"relai simulate --benchmarks {quote_shell(benchmark_name)} "
+                f"--result-json .relai/runs/{benchmark_name}-simulation.json"
+            ),
+            artifact_paths=[f".relai/runs/{benchmark_name}-simulation.json"],
+            succeeded=simulation_result_path.exists(),
+            next_action="Run this to measure the current agent against the registered benchmark.",
+        ),
+        WalkthroughStep(
+            id=f"{track.id}:optimize",
+            kind="command",
+            title="Optimize",
+            command=f"relai optimize --benchmarks {quote_shell(benchmark_name)}",
+            artifact_paths=[
+                ".relai/optimizer-scope.json",
+                ".relai/optimizer_runs/",
+                ".relai/optimizer-state/",
+            ],
+            succeeded=(
+                optimizer_scope_path.exists() or optimizer_runs_dir.exists() or optimizer_state_dir.exists()
+            ),
+            next_action="Run this to let RELAI propose or apply improvements using the benchmark.",
+        ),
+    ]
+
+
+def global_evaluator_steps(
+    relai_dir: Path,
+    track: LearningTrack,
+    env_name: str,
+    evaluator_prompt: str,
+) -> list[WalkthroughStep]:
+    learning_env_path = relai_dir / "learning-envs" / f"{env_name}.py"
+    evaluator_path = relai_dir / "evaluators" / f"{DEFAULT_GLOBAL_EVALUATOR_NAME}.py"
+    simulation_result_path = relai_dir / "runs" / f"{env_name}-simulation.json"
+    optimizer_scope_path = relai_dir / "optimizer-scope.json"
+    optimizer_runs_dir = relai_dir / "optimizer_runs"
+    optimizer_state_dir = relai_dir / "optimizer-state"
+
+    return [
+        WalkthroughStep(
+            id=f"{track.id}:learning-env",
+            kind="command",
+            title="Create smoke learning environment",
+            command=(
+                "relai learning-env create "
+                f"--prompt {quote_shell(DEFAULT_GLOBAL_EVALUATOR_SMOKE_PROMPT)} "
+                f"--name {quote_shell(env_name)}"
+            ),
+            artifact_paths=[f".relai/learning-envs/{env_name}.py"],
+            succeeded=learning_env_path.exists(),
+            next_action="Run this to create a small smoke test that the global evaluator can score.",
+        ),
+        WalkthroughStep(
+            id=f"{track.id}:evaluator",
+            kind="command",
+            title="Create global evaluator",
+            command=(
+                "relai evaluator create "
+                f"--prompt {quote_shell(evaluator_prompt)} "
+                f"--name {quote_shell(DEFAULT_GLOBAL_EVALUATOR_NAME)}"
+            ),
+            artifact_paths=[f".relai/evaluators/{DEFAULT_GLOBAL_EVALUATOR_NAME}.py"],
+            succeeded=evaluator_path.exists(),
+            next_action="Run this to create the global response-time evaluator.",
+        ),
+        WalkthroughStep(
+            id=f"{track.id}:simulate",
+            kind="command",
+            title="Simulate",
+            command=(
+                f"relai simulate --learning-envs {quote_shell(env_name)} "
+                f"--result-json .relai/runs/{env_name}-simulation.json"
+            ),
+            artifact_paths=[f".relai/runs/{env_name}-simulation.json"],
+            succeeded=simulation_result_path.exists(),
+            next_action="Run this smoke simulation with the global evaluator active.",
+        ),
+        WalkthroughStep(
+            id=f"{track.id}:optimize",
+            kind="command",
+            title="Optimize",
+            command=f"relai optimize --learning-envs {quote_shell(env_name)}",
+            artifact_paths=[
+                ".relai/optimizer-scope.json",
+                ".relai/optimizer_runs/",
+                ".relai/optimizer-state/",
+            ],
+            succeeded=(
+                optimizer_scope_path.exists() or optimizer_runs_dir.exists() or optimizer_state_dir.exists()
+            ),
+            next_action="Run this to let RELAI propose or apply improvements with the global evaluator active.",
+        ),
+    ]
+
+
+def delete_path(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return True
+
+
+def reset_track_outputs(
+    project_root: Path | None = None,
+    track_id: str = PROMPT_TRACK_ID,
+    env_name: str | None = None,
+) -> dict[str, object]:
+    root = (project_root or Path.cwd()).resolve()
+    track = selected_track(track_id)
+    normalized_env_name = normalize_env_name(
+        env_name or track.default_env_name,
+        track.default_env_name,
+    )
+    relai_dir = root / ".relai"
+    paths: list[Path] = [
+        relai_dir / "runs" / f"{normalized_env_name}-simulation.json",
+        relai_dir / "optimizer-scope.json",
+        relai_dir / "optimizer_runs",
+        relai_dir / "optimizer-state",
+    ]
+
+    if track.kind in {PROMPT_TRACK_KIND, LOG_TRACK_KIND, GLOBAL_EVALUATOR_TRACK_KIND}:
+        paths.append(relai_dir / "learning-envs" / f"{normalized_env_name}.py")
+
+    if track.kind == BENCHMARK_TRACK_KIND:
+        paths.extend(
+            [
+                relai_dir / "benchmarks" / f"{normalized_env_name}.py",
+                relai_dir / "benchmarks" / f"{normalized_env_name}.csv",
+                relai_dir / "benchmarks" / normalized_env_name,
+            ]
+        )
+
+    if track.kind == GLOBAL_EVALUATOR_TRACK_KIND:
+        paths.append(relai_dir / "evaluators" / f"{DEFAULT_GLOBAL_EVALUATOR_NAME}.py")
+
+    deleted = [str(path.relative_to(root)) for path in paths if delete_path(path)]
+    return {
+        "trackId": track.id,
+        "envName": normalized_env_name,
+        "deleted": deleted,
+    }
+
+
 def track_steps(
     root: Path,
     relai_dir: Path,
@@ -230,13 +490,19 @@ def track_steps(
     feedback: str,
     session_id: str | None,
 ) -> list[WalkthroughStep]:
-    if track.id == PROMPT_TRACK_ID:
+    if track.kind == PROMPT_TRACK_KIND:
         command = (
             "relai learning-env create "
             f"--prompt {quote_shell(prompt)} "
             f"--name {quote_shell(env_name)}"
         )
         return relai_artifact_steps(relai_dir, track, env_name, command)
+
+    if track.kind == BENCHMARK_TRACK_KIND:
+        return benchmark_artifact_steps(relai_dir, track, env_name, prompt)
+
+    if track.kind == GLOBAL_EVALUATOR_TRACK_KIND:
+        return global_evaluator_steps(relai_dir, track, env_name, prompt)
 
     log_path = session_log_path(session_id)
     log_exists = bool(log_path and (root / log_path).exists())
@@ -271,7 +537,10 @@ def walkthrough_status(
 ) -> dict[str, object]:
     root = (project_root or Path.cwd()).resolve()
     track = selected_track(track_id)
-    normalized_env_name = normalize_env_name(env_name or track.default_env_name, track.default_env_name)
+    normalized_env_name = normalize_env_name(
+        env_name or track.default_env_name,
+        track.default_env_name,
+    )
     selected_prompt = prompt if prompt is not None else track.default_prompt
     selected_feedback = feedback if feedback is not None else track.default_feedback
     relai_dir = root / ".relai"
@@ -291,31 +560,8 @@ def walkthrough_status(
 
     return {
         "projectRoot": str(root),
-        "tracks": [
-            {
-                "id": candidate.id,
-                "title": candidate.title,
-                "objective": candidate.objective,
-                "defaultEnvName": candidate.default_env_name,
-                "defaultPrompt": candidate.default_prompt,
-                "defaultFeedback": candidate.default_feedback,
-                "scenarioPrompt": candidate.scenario_prompt,
-                "summary": candidate.summary,
-                "useCase": candidate.use_case,
-            }
-            for candidate in TRACKS
-        ],
-        "selectedTrack": {
-            "id": track.id,
-            "title": track.title,
-            "objective": track.objective,
-            "defaultEnvName": track.default_env_name,
-            "defaultPrompt": track.default_prompt,
-            "defaultFeedback": track.default_feedback,
-            "scenarioPrompt": track.scenario_prompt,
-            "summary": track.summary,
-            "useCase": track.use_case,
-        },
+        "tracks": [serialize_track(candidate) for candidate in TRACKS],
+        "selectedTrack": serialize_track(track),
         "envName": normalized_env_name,
         "prompt": selected_prompt,
         "feedback": selected_feedback,
