@@ -91,6 +91,47 @@ def test_log_track_artifacts_use_track_env_name(tmp_path):
     assert steps["unwanted-behavior:simulate"]["succeeded"] is True
 
 
+def test_optimizer_detection_is_scoped_to_selected_learning_env(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "learning-envs").mkdir()
+    (relai_dir / "runs").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "learning-envs" / "response-signoff.py").write_text("", encoding="utf-8")
+    (relai_dir / "runs" / "response-signoff-simulation.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "optimizer-scope.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "optimizer-state" / "meta.json").write_text(
+        '{"discovered_environment_paths":[".relai/learning-envs/off-topic-guardrail.py"]}',
+        encoding="utf-8",
+    )
+
+    status = walkthrough_status(project_root=tmp_path)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert steps["intended-behavior:optimize"]["succeeded"] is False
+
+
+def test_optimizer_detection_accepts_current_learning_env_reference(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "learning-envs").mkdir()
+    (relai_dir / "runs").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "learning-envs" / "response-signoff.py").write_text("", encoding="utf-8")
+    (relai_dir / "runs" / "response-signoff-simulation.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "optimizer-state" / "meta.json").write_text(
+        '{"discovered_environment_paths":[".relai/learning-envs/response-signoff.py"]}',
+        encoding="utf-8",
+    )
+
+    status = walkthrough_status(project_root=tmp_path)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert steps["intended-behavior:optimize"]["succeeded"] is True
+
+
 def test_benchmark_track_commands_and_artifacts(tmp_path):
     relai_dir = tmp_path / ".relai"
     (relai_dir / "simulator").mkdir(parents=True)

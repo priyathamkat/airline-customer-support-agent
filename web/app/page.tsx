@@ -486,14 +486,19 @@ export default function Home() {
     setExpandedIndex(activeStepIndex);
   }, [activeStepIndex]);
 
-  // Keep the "current" pointer on the first incomplete step: skip past any step that's already
-  // done (e.g. several artifacts completed between polls, or resuming a partially-finished track).
+  // Keep the progress pointer on the first incomplete step. This also repairs stale localStorage
+  // if a previous app version advanced a different track from generic optimizer artifacts.
   useEffect(() => {
-    if (walkthrough && !walkthroughComplete && activeStep?.succeeded) {
-      setStoredStepIndex(activeStepIndex + 1);
+    if (!walkthrough) {
+      return;
+    }
+    const firstIncompleteIndex = walkthrough.steps.findIndex((step) => !step.succeeded);
+    const nextIndex = firstIncompleteIndex === -1 ? walkthrough.steps.length : firstIncompleteIndex;
+    if (activeStepIndex !== nextIndex) {
+      setStoredStepIndex(nextIndex);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walkthrough, walkthroughComplete, activeStep?.succeeded, activeStepIndex]);
+  }, [walkthrough, activeStepIndex]);
 
   // Decide the first-load flow once both the walkthrough and prerequisite state are known.
   // Sequence: setup gate (if needed) → tour → track picker. If prerequisites are already met the

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import shlex
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -249,6 +251,63 @@ def serialize_track(track: LearningTrack) -> dict[str, object]:
     }
 
 
+def normalize_relai_path(path: str | Path) -> str:
+    normalized = str(path).replace("\\", "/")
+    if "/.relai/" in normalized:
+        normalized = normalized.split("/.relai/", 1)[1]
+        return f"relai/{normalized}".rstrip("/")
+    return normalized.lstrip("./").rstrip("/")
+
+
+def iter_json_strings(value: object) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from iter_json_strings(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from iter_json_strings(item)
+
+
+def json_file_references_path(path: Path, target_paths: set[str]) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    try:
+        payloads = [json.loads(text)]
+    except json.JSONDecodeError:
+        payloads = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                payloads.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return any(
+        normalize_relai_path(value) in target_paths
+        for payload in payloads
+        for value in iter_json_strings(payload)
+    )
+
+
+def optimizer_succeeded_for_targets(relai_dir: Path, target_paths: list[str]) -> bool:
+    normalized_targets = {normalize_relai_path(path) for path in target_paths}
+    optimizer_state_dir = relai_dir / "optimizer-state"
+    optimizer_runs_dir = relai_dir / "optimizer_runs"
+    candidate_files = [relai_dir / "optimizer-scope.json"]
+    if optimizer_state_dir.exists():
+        candidate_files.extend(optimizer_state_dir.rglob("*.json"))
+    if optimizer_runs_dir.exists():
+        candidate_files.extend(optimizer_runs_dir.rglob("*.json"))
+        candidate_files.extend(optimizer_runs_dir.rglob("*.jsonl"))
+    return any(json_file_references_path(path, normalized_targets) for path in candidate_files)
+
+
 def prerequisites_status(
     project_root: Path | None = None,
     config_path: Path | None = None,
@@ -272,9 +331,8 @@ def relai_artifact_steps(
 ) -> list[WalkthroughStep]:
     learning_env_path = relai_dir / "learning-envs" / f"{env_name}.py"
     simulation_result_path = relai_dir / "runs" / f"{env_name}-simulation.json"
-    optimizer_scope_path = relai_dir / "optimizer-scope.json"
-    optimizer_runs_dir = relai_dir / "optimizer_runs"
-    optimizer_state_dir = relai_dir / "optimizer-state"
+    learning_env_relai_path = f".relai/learning-envs/{env_name}.py"
+    simulation_result_relai_path = f".relai/runs/{env_name}-simulation.json"
 
     return [
         WalkthroughStep(
@@ -282,7 +340,7 @@ def relai_artifact_steps(
             kind="command",
             title="Create learning environment",
             command=learning_env_command,
-            artifact_paths=[f".relai/learning-envs/{env_name}.py"],
+            artifact_paths=[learning_env_relai_path],
             succeeded=learning_env_path.exists(),
             next_action="Run this after setup to create the track learning environment.",
         ),
@@ -292,9 +350,9 @@ def relai_artifact_steps(
             title="Simulate",
             command=(
                 f"relai simulate --learning-envs {quote_shell(env_name)} "
-                f"--result-json .relai/runs/{env_name}-simulation.json"
+                f"--result-json {simulation_result_relai_path}"
             ),
-            artifact_paths=[f".relai/runs/{env_name}-simulation.json"],
+            artifact_paths=[simulation_result_relai_path],
             succeeded=simulation_result_path.exists(),
             next_action="Run this to measure the current agent against this track's learning environment.",
         ),
@@ -308,8 +366,9 @@ def relai_artifact_steps(
                 ".relai/optimizer_runs/",
                 ".relai/optimizer-state/",
             ],
-            succeeded=(
-                optimizer_scope_path.exists() or optimizer_runs_dir.exists() or optimizer_state_dir.exists()
+            succeeded=optimizer_succeeded_for_targets(
+                relai_dir,
+                [learning_env_relai_path, simulation_result_relai_path],
             ),
             next_action="Run this to let RELAI propose or apply improvements for this track.",
         ),
@@ -324,9 +383,8 @@ def benchmark_artifact_steps(
 ) -> list[WalkthroughStep]:
     benchmark_path = relai_dir / "benchmarks" / f"{benchmark_name}.py"
     simulation_result_path = relai_dir / "runs" / f"{benchmark_name}-simulation.json"
-    optimizer_scope_path = relai_dir / "optimizer-scope.json"
-    optimizer_runs_dir = relai_dir / "optimizer_runs"
-    optimizer_state_dir = relai_dir / "optimizer-state"
+    benchmark_relai_path = f".relai/benchmarks/{benchmark_name}.py"
+    simulation_result_relai_path = f".relai/runs/{benchmark_name}-simulation.json"
 
     return [
         WalkthroughStep(
@@ -339,7 +397,7 @@ def benchmark_artifact_steps(
                 f"--name {quote_shell(benchmark_name)} "
                 f"--prompt {quote_shell(prompt)}"
             ),
-            artifact_paths=[f".relai/benchmarks/{benchmark_name}.py"],
+            artifact_paths=[benchmark_relai_path],
             succeeded=benchmark_path.exists(),
             next_action="Run this to register the CSV-backed benchmark with RELAI.",
         ),
@@ -349,9 +407,9 @@ def benchmark_artifact_steps(
             title="Simulate",
             command=(
                 f"relai simulate --benchmarks {quote_shell(benchmark_name)} "
-                f"--result-json .relai/runs/{benchmark_name}-simulation.json"
+                f"--result-json {simulation_result_relai_path}"
             ),
-            artifact_paths=[f".relai/runs/{benchmark_name}-simulation.json"],
+            artifact_paths=[simulation_result_relai_path],
             succeeded=simulation_result_path.exists(),
             next_action="Run this to measure the current agent against the registered benchmark.",
         ),
@@ -365,8 +423,9 @@ def benchmark_artifact_steps(
                 ".relai/optimizer_runs/",
                 ".relai/optimizer-state/",
             ],
-            succeeded=(
-                optimizer_scope_path.exists() or optimizer_runs_dir.exists() or optimizer_state_dir.exists()
+            succeeded=optimizer_succeeded_for_targets(
+                relai_dir,
+                [benchmark_relai_path, simulation_result_relai_path],
             ),
             next_action="Run this to let RELAI propose or apply improvements using the benchmark.",
         ),
@@ -382,9 +441,9 @@ def global_evaluator_steps(
     learning_env_path = relai_dir / "learning-envs" / f"{env_name}.py"
     evaluator_path = relai_dir / "evaluators" / f"{DEFAULT_GLOBAL_EVALUATOR_NAME}.py"
     simulation_result_path = relai_dir / "runs" / f"{env_name}-simulation.json"
-    optimizer_scope_path = relai_dir / "optimizer-scope.json"
-    optimizer_runs_dir = relai_dir / "optimizer_runs"
-    optimizer_state_dir = relai_dir / "optimizer-state"
+    learning_env_relai_path = f".relai/learning-envs/{env_name}.py"
+    evaluator_relai_path = f".relai/evaluators/{DEFAULT_GLOBAL_EVALUATOR_NAME}.py"
+    simulation_result_relai_path = f".relai/runs/{env_name}-simulation.json"
 
     return [
         WalkthroughStep(
@@ -396,7 +455,7 @@ def global_evaluator_steps(
                 f"--prompt {quote_shell(DEFAULT_GLOBAL_EVALUATOR_SMOKE_PROMPT)} "
                 f"--name {quote_shell(env_name)}"
             ),
-            artifact_paths=[f".relai/learning-envs/{env_name}.py"],
+            artifact_paths=[learning_env_relai_path],
             succeeded=learning_env_path.exists(),
             next_action="Run this to create a small smoke test that the global evaluator can score.",
         ),
@@ -409,7 +468,7 @@ def global_evaluator_steps(
                 f"--prompt {quote_shell(evaluator_prompt)} "
                 f"--name {quote_shell(DEFAULT_GLOBAL_EVALUATOR_NAME)}"
             ),
-            artifact_paths=[f".relai/evaluators/{DEFAULT_GLOBAL_EVALUATOR_NAME}.py"],
+            artifact_paths=[evaluator_relai_path],
             succeeded=evaluator_path.exists(),
             next_action="Run this to create the global response-time evaluator.",
         ),
@@ -419,9 +478,9 @@ def global_evaluator_steps(
             title="Simulate",
             command=(
                 f"relai simulate --learning-envs {quote_shell(env_name)} "
-                f"--result-json .relai/runs/{env_name}-simulation.json"
+                f"--result-json {simulation_result_relai_path}"
             ),
-            artifact_paths=[f".relai/runs/{env_name}-simulation.json"],
+            artifact_paths=[simulation_result_relai_path],
             succeeded=simulation_result_path.exists(),
             next_action="Run this smoke simulation with the global evaluator active.",
         ),
@@ -435,8 +494,9 @@ def global_evaluator_steps(
                 ".relai/optimizer_runs/",
                 ".relai/optimizer-state/",
             ],
-            succeeded=(
-                optimizer_scope_path.exists() or optimizer_runs_dir.exists() or optimizer_state_dir.exists()
+            succeeded=optimizer_succeeded_for_targets(
+                relai_dir,
+                [learning_env_relai_path, evaluator_relai_path, simulation_result_relai_path],
             ),
             next_action="Run this to let RELAI propose or apply improvements with the global evaluator active.",
         ),
