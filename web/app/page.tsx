@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowRight,
   Check,
+  ChevronDown,
   CircleHelp,
   Loader2,
   MessageSquare,
@@ -208,6 +209,7 @@ export default function Home() {
   const [prereq, setPrereq] = useState<PrerequisitesStatus | null>(null);
   const [gateEngaged, setGateEngaged] = useState(false);
   const [gateDismissed, setGateDismissed] = useState(false);
+  const [expandedIndex, setExpandedIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const pollInFlightRef = useRef(false);
   const prereqPollInFlightRef = useRef(false);
@@ -395,6 +397,21 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  // The walkthrough is a single-open accordion: auto-open the current step, and re-open the new
+  // current step whenever progress advances (manual peeks persist until the next advance).
+  useEffect(() => {
+    setExpandedIndex(activeStepIndex);
+  }, [activeStepIndex]);
+
+  // Keep the "current" pointer on the first incomplete step: skip past any step that's already
+  // done (e.g. several artifacts completed between polls, or resuming a partially-finished track).
+  useEffect(() => {
+    if (walkthrough && !walkthroughComplete && activeStep?.succeeded) {
+      setStoredStepIndex(activeStepIndex + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walkthrough, walkthroughComplete, activeStep?.succeeded, activeStepIndex]);
 
   // Decide the first-load flow once both the walkthrough and prerequisite state are known.
   // If prerequisites are already met, the welcome gate won't show, so open the tour directly.
@@ -659,13 +676,13 @@ export default function Home() {
       className={cn(
         "grid h-screen grid-rows-[auto_1fr] overflow-hidden lg:grid-rows-1",
         historyCollapsed
-          ? "lg:grid-cols-[3.25rem_minmax(420px,1fr)_minmax(360px,440px)]"
-          : "lg:grid-cols-[clamp(240px,20vw,300px)_minmax(420px,1fr)_minmax(360px,440px)]"
+          ? "lg:grid-cols-[3.25rem_minmax(360px,1fr)_minmax(480px,1.5fr)]"
+          : "lg:grid-cols-[clamp(220px,16vw,260px)_minmax(360px,1fr)_minmax(480px,1.5fr)]"
       )}
     >
       {/* Right column — learning tracks / walkthrough */}
       <section
-        className="flex min-h-0 flex-col overflow-y-auto border-b border-border bg-muted/40 p-6 lg:order-3 lg:border-b-0 lg:border-l"
+        className="flex min-h-0 flex-col overflow-y-auto [scrollbar-gutter:stable] border-b border-border bg-muted/40 p-6 lg:order-3 lg:border-b-0 lg:border-l"
         aria-label="RELAI walkthrough"
       >
         <div data-tour="tracks">
@@ -700,49 +717,136 @@ export default function Home() {
           </p>
         ) : null}
 
-        {/* Editable fields for the active step */}
-        {activeStep && activeStep.id !== "init" ? (
-          <div className="mb-4 grid gap-4">
-            {activeStep.kind === "command" ? (
-              <div className="grid gap-2">
-                <label htmlFor="envName" className="text-sm font-medium">
-                  Environment name
-                </label>
-                <Input id="envName" value={envName} onChange={(event) => setEnvName(event.target.value)} />
-              </div>
-            ) : null}
-            {activeStep.id.endsWith(":learning-env") && selectedTrackId === DEFAULT_TRACK_ID ? (
-              <div className="grid gap-2">
-                <label htmlFor="prompt" className="text-sm font-medium">
-                  Learning prompt
-                </label>
-                <Textarea
-                  id="prompt"
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  rows={6}
-                />
-              </div>
-            ) : null}
-            {activeStep.id.endsWith(":learning-env") && selectedTrackId === LOG_TRACK_ID ? (
-              <div className="grid gap-2">
-                <label htmlFor="feedback" className="text-sm font-medium">
-                  Feedback
-                </label>
-                <Textarea
-                  id="feedback"
-                  value={feedback}
-                  onChange={(event) => setFeedback(event.target.value)}
-                  rows={5}
-                />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        {/* Steps — single-open accordion */}
+        {walkthrough ? (
+          <div className="grid gap-2" data-tour="step">
+            {walkthrough.steps.map((step, i) => {
+              const isDone = step.succeeded;
+              const isCurrent = i === activeStepIndex && !walkthroughComplete;
+              const isOpen = expandedIndex === i;
+              const showEnvName = step.kind === "command" && step.id !== "init";
+              const showPrompt = step.id.endsWith(":learning-env") && selectedTrackId === DEFAULT_TRACK_ID;
+              const showFeedback = step.id.endsWith(":learning-env") && selectedTrackId === LOG_TRACK_ID;
+              return (
+                <div
+                  key={step.id}
+                  className={cn(
+                    "overflow-hidden rounded-lg border bg-card transition-colors",
+                    isCurrent ? "border-primary/50 ring-1 ring-primary/40" : "border-border"
+                  )}
+                >
+                  <button
+                    type="button"
+                    aria-expanded={isOpen}
+                    onClick={() => setExpandedIndex((current) => (current === i ? -1 : i))}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
+                  >
+                    <StepChip done={isDone} current={isCurrent} number={i + 1} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{step.title}</span>
+                    {isCurrent ? (
+                      <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+                        Current
+                      </span>
+                    ) : null}
+                    <ChevronDown
+                      className={cn(
+                        "size-4 shrink-0 text-muted-foreground transition-transform",
+                        isOpen && "rotate-180"
+                      )}
+                    />
+                  </button>
 
-        {/* Active step / completion */}
+                  {isOpen ? (
+                    <div className="grid gap-4 border-t border-border px-3 py-3.5">
+                      <p className="text-[13px] leading-relaxed text-muted-foreground">{step.nextAction}</p>
+
+                      {showEnvName ? (
+                        <div className="grid gap-2">
+                          <label htmlFor={`envName-${step.id}`} className="text-sm font-medium">
+                            Environment name
+                          </label>
+                          <Input
+                            id={`envName-${step.id}`}
+                            value={envName}
+                            onChange={(event) => setEnvName(event.target.value)}
+                          />
+                        </div>
+                      ) : null}
+                      {showPrompt ? (
+                        <div className="grid gap-2">
+                          <label htmlFor="prompt" className="text-sm font-medium">
+                            Learning prompt
+                          </label>
+                          <Textarea
+                            id="prompt"
+                            value={prompt}
+                            onChange={(event) => setPrompt(event.target.value)}
+                            rows={6}
+                          />
+                        </div>
+                      ) : null}
+                      {showFeedback ? (
+                        <div className="grid gap-2">
+                          <label htmlFor="feedback" className="text-sm font-medium">
+                            Feedback
+                          </label>
+                          <Textarea
+                            id="feedback"
+                            value={feedback}
+                            onChange={(event) => setFeedback(event.target.value)}
+                            rows={5}
+                          />
+                        </div>
+                      ) : null}
+
+                      {step.kind === "chat" && walkthrough.selectedTrack.scenarioPrompt ? (
+                        <div className="rounded-lg border border-border bg-muted/50 p-3">
+                          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                            Scenario prompt
+                          </p>
+                          <p className="mt-1.5 text-sm">{walkthrough.selectedTrack.scenarioPrompt}</p>
+                        </div>
+                      ) : null}
+
+                      {step.command ? (
+                        <CommandBlock
+                          command={step.command}
+                          projectRoot={walkthrough.projectRoot}
+                          copied={copiedStepId === step.id}
+                          onCopy={() => void copyCommand(step)}
+                        />
+                      ) : null}
+
+                      {isCurrent || isDone ? (
+                        <VerifyStatus state={isDone ? "detected" : verifyState} kind={step.kind} />
+                      ) : (
+                        <p className="px-0.5 text-sm text-muted-foreground">
+                          Finish the current step to start this one.
+                        </p>
+                      )}
+
+                      {step.kind === "chat" && isCurrent ? (
+                        <Button className="w-full" disabled={isStreaming} onClick={() => void runScenario(step)}>
+                          {isStreaming ? <Loader2 className="spin" /> : <Send />}
+                          Run scenario in chat
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <Button variant="outline" onClick={() => void refreshWalkthrough()}>
+            <RefreshCw />
+            Load walkthrough
+          </Button>
+        )}
+
+        {/* Completion */}
         {walkthroughComplete ? (
-          <Card>
+          <Card className="mt-3">
             <CardHeader>
               <div className="flex items-center gap-3">
                 <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-muted text-[color:var(--success)]">
@@ -761,55 +865,7 @@ export default function Home() {
               </Button>
             </CardContent>
           </Card>
-        ) : activeStep ? (
-          <Card className="gap-4 py-5" data-tour="step">
-            <CardHeader>
-              <div className="flex items-start gap-3">
-                <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-xs font-medium text-muted-foreground">
-                  {currentStepNumber}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <CardTitle className="text-[15px]">{activeStep.title}</CardTitle>
-                  <CardDescription className="mt-1 leading-relaxed">{activeStep.nextAction}</CardDescription>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              {activeStep.kind === "chat" && walkthrough?.selectedTrack.scenarioPrompt ? (
-                <div className="rounded-lg border border-border bg-muted/50 p-3">
-                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Scenario prompt
-                  </p>
-                  <p className="mt-1.5 text-sm">{walkthrough.selectedTrack.scenarioPrompt}</p>
-                </div>
-              ) : null}
-
-              {activeStep.command ? (
-                <CommandBlock
-                  command={activeStep.command}
-                  projectRoot={walkthrough?.projectRoot}
-                  copied={copiedStepId === activeStep.id}
-                  onCopy={() => void copyCommand(activeStep)}
-                />
-              ) : null}
-
-              {/* Live verification status */}
-              <VerifyStatus state={verifyState} kind={activeStep.kind} />
-
-              {activeStep.kind === "chat" ? (
-                <Button className="w-full" disabled={isStreaming} onClick={() => void runScenario(activeStep)}>
-                  {isStreaming ? <Loader2 className="spin" /> : <Send />}
-                  Run scenario in chat
-                </Button>
-              ) : null}
-            </CardContent>
-          </Card>
-        ) : (
-          <Button variant="outline" onClick={() => void refreshWalkthrough()}>
-            <RefreshCw />
-            Load walkthrough
-          </Button>
-        )}
+        ) : null}
 
         {/* Progress */}
         <div className="mt-5" data-tour="progress">
@@ -873,7 +929,7 @@ export default function Home() {
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 py-6">
           {messages.length === 0 ? (
             <div className="flex h-full min-h-60 items-center justify-center text-center text-sm text-muted-foreground">
               <p>
@@ -1043,6 +1099,23 @@ export default function Home() {
         />
       ) : null}
     </main>
+  );
+}
+
+function StepChip({ done, current, number }: { done: boolean; current: boolean; number: number }) {
+  return (
+    <span
+      className={cn(
+        "flex size-6 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
+        done
+          ? "bg-[color:var(--success)] text-background"
+          : current
+            ? "bg-primary text-primary-foreground"
+            : "border border-border bg-muted text-muted-foreground"
+      )}
+    >
+      {done ? <Check className="size-3.5" /> : number}
+    </span>
   );
 }
 

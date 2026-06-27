@@ -24,9 +24,9 @@ export function CommandBlock({
           {projectRoot ?? "your project directory"}
         </p>
       </div>
-      <div className="flex items-center gap-2 py-2 pr-2 pl-3">
-        <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
-        <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre font-mono text-xs text-foreground">
+      <div className="flex items-start gap-2 py-2 pr-2 pl-3">
+        <Terminal className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <code className="min-w-0 flex-1 font-mono text-xs whitespace-pre-wrap break-words text-foreground">
           {command}
         </code>
         <Tooltip>
