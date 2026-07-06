@@ -837,7 +837,7 @@ export default function Home() {
           <div className="flex min-w-0 items-center gap-2.5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img className="size-7 shrink-0 rounded-lg object-contain" src="/logo.png" alt="RELAI" />
-            <h1 className="truncate text-sm font-semibold tracking-tight">RELAI Onboarding</h1>
+            <h1 className="truncate text-sm font-semibold tracking-tight">RELAI Sample Agent</h1>
           </div>
           <div className="flex items-center gap-1.5">
             <ThemeToggle />
@@ -1191,7 +1191,7 @@ export default function Home() {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img className="size-8 shrink-0 rounded-lg object-contain" src="/logo.png" alt="RELAI" />
                 <div className="min-w-0">
-                  <h1 className="truncate text-sm font-semibold leading-tight tracking-tight">RELAI Onboarding</h1>
+                  <h1 className="truncate text-sm font-semibold leading-tight tracking-tight">RELAI Sample Agent</h1>
                 </div>
               </div>
               <Tooltip>

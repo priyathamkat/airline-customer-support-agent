@@ -1,4 +1,4 @@
-# RELAI Airline Onboarding
+# RELAI Sample Agent
 
 A guided RELAI CLI learning-track app for a Python SDK airline customer support agent.
 
