@@ -290,7 +290,11 @@ def iter_json_strings(value: object) -> Iterable[str]:
             yield from iter_json_strings(item)
 
 
-def json_file_references_path(path: Path, target_paths: set[str]) -> bool:
+def json_file_references_path(
+    path: Path,
+    target_paths: set[str],
+    target_prefixes: set[str] | None = None,
+) -> bool:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -306,24 +310,43 @@ def json_file_references_path(path: Path, target_paths: set[str]) -> bool:
                 payloads.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    return any(
-        normalize_relai_path(value) in target_paths
-        for payload in payloads
-        for value in iter_json_strings(payload)
-    )
+    normalized_prefixes = target_prefixes or set()
+    for payload in payloads:
+        for value in iter_json_strings(payload):
+            normalized_value = normalize_relai_path(value)
+            if normalized_value in target_paths:
+                return True
+            if any(normalized_value.startswith(prefix) for prefix in normalized_prefixes):
+                return True
+    return False
 
 
-def optimizer_succeeded_for_targets(relai_dir: Path, target_paths: list[str]) -> bool:
+def optimizer_succeeded_for_targets(
+    relai_dir: Path,
+    target_paths: list[str],
+    target_prefixes: list[str] | None = None,
+    newer_than: Path | None = None,
+) -> bool:
     normalized_targets = {normalize_relai_path(path) for path in target_paths}
+    normalized_prefixes = {
+        f"{normalize_relai_path(path)}/"
+        for path in target_prefixes or []
+    }
     optimizer_state_dir = relai_dir / "optimizer-state"
     optimizer_runs_dir = relai_dir / "optimizer_runs"
+    newer_than_mtime = newer_than.stat().st_mtime if newer_than and newer_than.exists() else None
     candidate_files = [relai_dir / "optimizer-scope.json"]
     if optimizer_state_dir.exists():
         candidate_files.extend(optimizer_state_dir.rglob("*.json"))
     if optimizer_runs_dir.exists():
         candidate_files.extend(optimizer_runs_dir.rglob("*.json"))
         candidate_files.extend(optimizer_runs_dir.rglob("*.jsonl"))
-    return any(json_file_references_path(path, normalized_targets) for path in candidate_files)
+    return any(
+        (newer_than_mtime is None or path.stat().st_mtime >= newer_than_mtime)
+        and json_file_references_path(path, normalized_targets, normalized_prefixes)
+        for path in candidate_files
+        if path.exists()
+    )
 
 
 def prerequisites_status(
@@ -384,9 +407,13 @@ def relai_artifact_steps(
                 ".relai/optimizer_runs/",
                 ".relai/optimizer-state/",
             ],
-            succeeded=optimizer_succeeded_for_targets(
-                relai_dir,
-                [learning_env_relai_path, simulation_result_relai_path],
+            succeeded=(
+                simulation_result_path.exists()
+                and optimizer_succeeded_for_targets(
+                    relai_dir,
+                    [learning_env_relai_path, simulation_result_relai_path],
+                    newer_than=simulation_result_path,
+                )
             ),
             next_action="Run this to let RELAI propose or apply improvements for this loop.",
         ),
@@ -439,9 +466,14 @@ def benchmark_artifact_steps(
                 ".relai/optimizer_runs/",
                 ".relai/optimizer-state/",
             ],
-            succeeded=optimizer_succeeded_for_targets(
-                relai_dir,
-                [benchmark_relai_path, simulation_result_relai_path],
+            succeeded=(
+                simulation_result_path.exists()
+                and optimizer_succeeded_for_targets(
+                    relai_dir,
+                    [benchmark_relai_path, simulation_result_relai_path],
+                    target_prefixes=[f".relai/virtual-benchmark-envs/{benchmark_name}"],
+                    newer_than=simulation_result_path,
+                )
             ),
             next_action="Run this to let RELAI propose or apply improvements using the benchmark.",
         ),
@@ -553,9 +585,13 @@ def global_evaluator_steps(
                 ".relai/optimizer_runs/",
                 ".relai/optimizer-state/",
             ],
-            succeeded=optimizer_succeeded_for_targets(
-                relai_dir,
-                [target.relai_path, evaluator_relai_path, simulation_result_relai_path],
+            succeeded=(
+                simulation_result_path.exists()
+                and optimizer_succeeded_for_targets(
+                    relai_dir,
+                    [target.relai_path, evaluator_relai_path, simulation_result_relai_path],
+                    newer_than=simulation_result_path,
+                )
             ),
             next_action="Run this to let RELAI propose or apply improvements with the global evaluator active.",
         ),

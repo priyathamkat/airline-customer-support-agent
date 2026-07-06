@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 from airline_support.walkthrough import (
@@ -145,6 +146,54 @@ def test_optimizer_detection_accepts_current_learning_env_reference(tmp_path):
     assert steps["intended-behavior:optimize"]["succeeded"] is True
 
 
+def test_learning_env_optimize_requires_simulation_result(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "learning-envs").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "learning-envs" / "response-signoff.py").write_text("", encoding="utf-8")
+    (relai_dir / "optimizer-state" / "meta.json").write_text(
+        '{"discovered_environment_paths":[".relai/learning-envs/response-signoff.py"]}',
+        encoding="utf-8",
+    )
+
+    status = walkthrough_status(project_root=tmp_path)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert steps["intended-behavior:simulate"]["succeeded"] is False
+    assert steps["intended-behavior:optimize"]["succeeded"] is False
+
+
+def test_learning_env_optimize_requires_optimizer_after_simulation(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "learning-envs").mkdir()
+    (relai_dir / "runs").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "learning-envs" / "response-signoff.py").write_text("", encoding="utf-8")
+    simulation_path = relai_dir / "runs" / "response-signoff-simulation.json"
+    simulation_path.write_text("{}", encoding="utf-8")
+    optimizer_meta_path = relai_dir / "optimizer-state" / "meta.json"
+    optimizer_meta_path.write_text(
+        '{"discovered_environment_paths":[".relai/learning-envs/response-signoff.py"]}',
+        encoding="utf-8",
+    )
+    os.utime(optimizer_meta_path, (10, 10))
+    os.utime(simulation_path, (20, 20))
+
+    stale_status = walkthrough_status(project_root=tmp_path)
+    stale_steps = {step["id"]: step for step in stale_status["steps"]}
+    assert stale_steps["intended-behavior:optimize"]["succeeded"] is False
+
+    os.utime(optimizer_meta_path, (30, 30))
+
+    fresh_status = walkthrough_status(project_root=tmp_path)
+    fresh_steps = {step["id"]: step for step in fresh_status["steps"]}
+    assert fresh_steps["intended-behavior:optimize"]["succeeded"] is True
+
+
 def test_benchmark_track_commands_and_artifacts(tmp_path):
     relai_dir = tmp_path / ".relai"
     (relai_dir / "simulator").mkdir(parents=True)
@@ -167,6 +216,46 @@ def test_benchmark_track_commands_and_artifacts(tmp_path):
     assert "--prompt" not in steps["benchmark:register"]["command"]
     assert steps["benchmark:simulate"]["command"].startswith("relai simulate --benchmarks airline-support-suite")
     assert steps["benchmark:optimize"]["command"] == "relai optimize"
+
+
+def test_benchmark_optimize_accepts_virtual_benchmark_env_reference(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "benchmarks").mkdir()
+    (relai_dir / "runs").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "benchmarks" / "airline-support-suite.py").write_text("", encoding="utf-8")
+    simulation_path = relai_dir / "runs" / "airline-support-suite-simulation.json"
+    simulation_path.write_text("{}", encoding="utf-8")
+    (relai_dir / "optimizer-state" / "meta.json").write_text(
+        '{"discovered_environment_paths":[".relai/virtual-benchmark-envs/airline-support-suite/sample-0.py"]}',
+        encoding="utf-8",
+    )
+
+    status = walkthrough_status(project_root=tmp_path, track_id=BENCHMARK_TRACK_ID)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert steps["benchmark:optimize"]["succeeded"] is True
+
+
+def test_benchmark_optimize_requires_simulation_result(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "benchmarks").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "benchmarks" / "airline-support-suite.py").write_text("", encoding="utf-8")
+    (relai_dir / "optimizer-state" / "meta.json").write_text(
+        '{"discovered_environment_paths":[".relai/virtual-benchmark-envs/airline-support-suite/sample-0.py"]}',
+        encoding="utf-8",
+    )
+
+    status = walkthrough_status(project_root=tmp_path, track_id=BENCHMARK_TRACK_ID)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert steps["benchmark:simulate"]["succeeded"] is False
+    assert steps["benchmark:optimize"]["succeeded"] is False
 
 
 def test_benchmark_samples_do_not_duplicate_learning_env_behaviors():
@@ -271,6 +360,59 @@ def test_global_evaluator_track_commands_and_artifacts(tmp_path):
         "--result-json .relai/runs/response-signoff-global-evaluator-simulation.json"
     )
     assert steps["global-evaluator:optimize"]["command"] == "relai optimize"
+    assert steps["global-evaluator:optimize"]["succeeded"] is False
+
+
+def test_global_evaluator_optimize_ignores_base_env_optimizer_without_global_simulation(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "learning-envs").mkdir()
+    (relai_dir / "evaluators").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "learning-envs" / "response-signoff.py").write_text("", encoding="utf-8")
+    (relai_dir / "evaluators" / "response-token.py").write_text("", encoding="utf-8")
+    (relai_dir / "optimizer-state" / "meta.json").write_text(
+        '{"discovered_environment_paths":[".relai/learning-envs/response-signoff.py"]}',
+        encoding="utf-8",
+    )
+
+    status = walkthrough_status(project_root=tmp_path, track_id=GLOBAL_EVALUATOR_TRACK_ID)
+    steps = {step["id"]: step for step in status["steps"]}
+
+    assert steps["global-evaluator:simulate"]["succeeded"] is False
+    assert steps["global-evaluator:optimize"]["succeeded"] is False
+
+
+def test_global_evaluator_optimize_requires_optimizer_after_global_simulation(tmp_path):
+    relai_dir = tmp_path / ".relai"
+    (relai_dir / "simulator").mkdir(parents=True)
+    (relai_dir / "learning-envs").mkdir()
+    (relai_dir / "evaluators").mkdir()
+    (relai_dir / "runs").mkdir()
+    (relai_dir / "optimizer-state").mkdir()
+    (relai_dir / "learning-env-context.json").write_text("{}", encoding="utf-8")
+    (relai_dir / "learning-envs" / "response-signoff.py").write_text("", encoding="utf-8")
+    (relai_dir / "evaluators" / "response-token.py").write_text("", encoding="utf-8")
+    simulation_path = relai_dir / "runs" / "response-signoff-global-evaluator-simulation.json"
+    simulation_path.write_text("{}", encoding="utf-8")
+    optimizer_meta_path = relai_dir / "optimizer-state" / "meta.json"
+    optimizer_meta_path.write_text(
+        '{"discovered_environment_paths":[".relai/learning-envs/response-signoff.py"]}',
+        encoding="utf-8",
+    )
+    os.utime(optimizer_meta_path, (10, 10))
+    os.utime(simulation_path, (20, 20))
+
+    stale_status = walkthrough_status(project_root=tmp_path, track_id=GLOBAL_EVALUATOR_TRACK_ID)
+    stale_steps = {step["id"]: step for step in stale_status["steps"]}
+    assert stale_steps["global-evaluator:optimize"]["succeeded"] is False
+
+    os.utime(optimizer_meta_path, (30, 30))
+
+    fresh_status = walkthrough_status(project_root=tmp_path, track_id=GLOBAL_EVALUATOR_TRACK_ID)
+    fresh_steps = {step["id"]: step for step in fresh_status["steps"]}
+    assert fresh_steps["global-evaluator:optimize"]["succeeded"] is True
 
 
 def test_global_evaluator_track_can_simulate_detected_benchmark(tmp_path):
