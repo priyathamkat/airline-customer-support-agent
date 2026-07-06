@@ -21,3 +21,5 @@ web/out/
 .relai/simulator.env
 .relai/tags.json
 .relai/tag-records/
+.relai/.npmrc
+.relai/node_modules/
