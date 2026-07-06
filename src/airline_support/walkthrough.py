@@ -86,15 +86,16 @@ TRACKS: tuple[LearningTrack, ...] = (
         kind=PROMPT_TRACK_KIND,
         title="Specify Intended Behavior",
         objective=(
-            "Create a learning environment for a required response signoff, simulate the agent, "
-            "then optimize toward that behavior."
+            "Turn one simple plain-English behavior prompt into a learning environment, measure "
+            "the current agent against it, then optimize toward that behavior. Use this when you "
+            "have a target behavior in mind and want the agent to follow it reliably."
         ),
         default_env_name=DEFAULT_ENV_NAME,
         default_prompt=DEFAULT_PROMPT,
         default_feedback="",
         summary=(
-            "Turn one simple plain-English behavior into a learning environment, measure the current "
-            "agent against it, then optimize toward that behavior."
+            "Turn one simple plain-English behavior prompt into a learning environment, measure "
+            "the current agent against it, then optimize toward that behavior."
         ),
         use_case=(
             "Use when you have a target behavior in mind and want the agent to follow it reliably."
@@ -104,14 +105,18 @@ TRACKS: tuple[LearningTrack, ...] = (
         id=LOG_TRACK_ID,
         kind=LOG_TRACK_KIND,
         title="Fix Unwanted Behavior",
-        objective="Capture a bad run, turn the log plus feedback into a learning environment, then optimize away from it.",
+        objective=(
+            "Capture a real, undesirable behavior in a session log, then turn that log plus your "
+            "feedback into a learning environment and optimize the unwanted behavior away. Use this "
+            "when the agent did something wrong and you want to stop it from happening again."
+        ),
         default_env_name=DEFAULT_LOG_ENV_NAME,
         default_prompt="",
         default_feedback=DEFAULT_FEEDBACK,
         scenario_prompt=DEFAULT_OFF_TOPIC_PROMPT,
         summary=(
-            "Capture a real bad response, turn that session log plus your feedback into a learning "
-            "environment, then optimize the unwanted behavior away."
+            "Capture a real, undesirable behavior in a session log, then turn that log plus your "
+            "feedback into a learning environment and optimize the unwanted behavior away."
         ),
         use_case="Use when the agent did something wrong and you want to stop it from happening again.",
     ),
@@ -120,32 +125,36 @@ TRACKS: tuple[LearningTrack, ...] = (
         kind=BENCHMARK_TRACK_KIND,
         title="Benchmark",
         objective=(
-            "Register a small CSV benchmark, simulate the agent against it, then optimize with "
-            "that benchmark."
+            "Register a reusable benchmark in CSV format, then run simulation and optimization "
+            "against it. Use this when you have a set of samples, each with inputs, expected "
+            "outputs, and sample-specific evaluators, that should be rerun together."
         ),
         default_env_name=DEFAULT_BENCHMARK_NAME,
         default_prompt=DEFAULT_BENCHMARK_PROMPT,
         default_feedback="",
         summary=(
-            "Register a reusable CSV-backed benchmark for several airline support cases, then run "
-            "simulation and optimization against it."
+            "Register a reusable benchmark in CSV format, then run simulation and optimization "
+            "against it."
         ),
-        use_case="Use when you have a small suite of examples that should be rerun together.",
+        use_case=(
+            "Use when you have a set of samples, each with inputs, expected outputs, and "
+            "sample-specific evaluators, that should be rerun together."
+        ),
     ),
     LearningTrack(
         id=GLOBAL_EVALUATOR_TRACK_ID,
         kind=GLOBAL_EVALUATOR_TRACK_KIND,
         title="Global Evaluators",
         objective=(
-            "Create a response-token global evaluator, run it with a smoke test, then optimize "
-            "with that evaluator active."
+            "Create one evaluator that applies across all simulations for the agent. Use this when "
+            "one scoring rule should apply globally instead of living in a single learning "
+            "environment."
         ),
         default_env_name=DEFAULT_GLOBAL_EVALUATOR_ENV_NAME,
         default_prompt=DEFAULT_GLOBAL_EVALUATOR_PROMPT,
         default_feedback="",
         summary=(
-            "Create one evaluator that applies across simulations for the agent, using a 100-token "
-            "response limit as the example."
+            "Create one evaluator that applies across all simulations for the agent."
         ),
         use_case=(
             "Use when one scoring rule should apply globally instead of living in a single "
@@ -409,7 +418,7 @@ def benchmark_artifact_steps(
             ),
             artifact_paths=[benchmark_relai_path],
             succeeded=benchmark_path.exists(),
-            next_action="Run this to register the CSV-backed benchmark with RELAI.",
+            next_action="Run this to register the CSV benchmark with RELAI.",
         ),
         WalkthroughStep(
             id=f"{track.id}:simulate",

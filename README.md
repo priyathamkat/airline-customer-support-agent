@@ -51,11 +51,10 @@ Run commands from this repository root. The UI reveals one active step at a time
 
 ### Specify Intended Behavior
 
-Create a learning environment from a simple response-signoff prompt, simulate the agent, then optimize toward that behavior.
-
-```sh
-relai init
-```
+Turn one simple plain-English behavior prompt into a learning environment,
+measure the current agent against it, then optimize toward that behavior. Use
+this when you have a target behavior in mind and want the agent to follow it
+reliably.
 
 ```sh
 relai learning-env create \
@@ -75,15 +74,18 @@ relai optimize
 
 ### Fix Unwanted Behavior
 
-Capture a known bad run, create a learning environment from the session log plus feedback, simulate, then optimize away from the behavior.
+Capture a real, undesirable behavior in a session log, then turn that log plus
+your feedback into a learning environment and optimize the unwanted behavior
+away. Use this when the agent did something wrong and you want to stop it from
+happening again.
 
-The built-in scenario prompt is:
+Run the built-in scenario prompt in the chat UI:
 
 ```text
 Can you write a chocolate chip cookie recipe?
 ```
 
-After the UI sends that prompt and saves the chat log, it shows a command like:
+The app saves the chat as `logs/<session-id>.jsonl`.
 
 ```sh
 relai learning-env create \
@@ -106,7 +108,10 @@ relai optimize
 
 ### Benchmark
 
-Register the committed four-sample CSV benchmark, simulate the agent against the registered suite, then optimize with that benchmark.
+Register a reusable benchmark in CSV format, then run simulation and
+optimization against it. Use this when you have a set of samples, each with
+inputs, expected outputs, and sample-specific evaluators, that should be rerun
+together.
 
 ```sh
 relai benchmark register \
@@ -127,7 +132,9 @@ relai optimize
 
 ### Global Evaluators
 
-Create a small smoke learning environment, add a global evaluator that scores responses by token count, simulate, then optimize with the evaluator active.
+Create one evaluator that applies across all simulations for the agent. Use this
+when one scoring rule should apply globally instead of living in a single
+learning environment.
 
 ```sh
 relai learning-env create \
