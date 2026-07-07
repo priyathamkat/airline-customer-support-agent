@@ -13,6 +13,12 @@ def input_from(values: list[str]) -> Iterator[str]:
     yield from values
 
 
+@pytest.fixture(autouse=True)
+def api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
 @pytest.mark.asyncio
 async def test_terminal_chat_logs_user_and_assistant_messages(monkeypatch, tmp_path):
     monkeypatch.setenv("AIRLINE_SUPPORT_LOG_DIR", str(tmp_path))
@@ -61,6 +67,34 @@ async def test_terminal_chat_creates_new_log_each_run(monkeypatch, tmp_path):
     assert first_log_path != second_log_path
     assert tmp_path.joinpath(first_log_path).exists()
     assert tmp_path.joinpath(second_log_path).exists()
+
+
+@pytest.mark.asyncio
+async def test_terminal_chat_can_use_named_log(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIRLINE_SUPPORT_LOG_DIR", str(tmp_path))
+    tmp_path.joinpath("off-topic-guardrail.jsonl").write_text("old log", encoding="utf-8")
+
+    async def fake_stream_agent_response(messages):
+        assert messages[-1].content == "Can you write a chocolate chip cookie recipe?"
+        yield "I can only help with airline support questions."
+
+    monkeypatch.setattr(main, "stream_agent_response", fake_stream_agent_response)
+    inputs = input_from(["Can you write a chocolate chip cookie recipe?", "exit"])
+
+    log_path = await main.chat(
+        log_name="off-topic-guardrail.jsonl",
+        input_func=lambda _prompt: next(inputs),
+        output_stream=io.StringIO(),
+    )
+
+    assert log_path == str(tmp_path / "off-topic-guardrail.jsonl")
+    events = [
+        json.loads(line)
+        for line in tmp_path.joinpath("off-topic-guardrail.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[0]["id"] == "off-topic-guardrail"
+    assert events[1]["content"] == "Can you write a chocolate chip cookie recipe?"
+    assert events[2]["content"] == "I can only help with airline support questions."
 
 
 @pytest.mark.asyncio

@@ -48,13 +48,15 @@ commit_dependency_changes() {
   fi
 }
 
-load_env_api_key() {
-  if [ -n "${OPENAI_API_KEY:-}" ] || [ ! -f "$ENV_FILE" ]; then
+read_env_value() {
+  local key_name="$1"
+
+  if [ ! -f "$ENV_FILE" ]; then
     return
   fi
 
   local line
-  line="$(grep -E '^[[:space:]]*(export[[:space:]]+)?OPENAI_API_KEY=' "$ENV_FILE" | tail -n 1 || true)"
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key_name}=" "$ENV_FILE" | tail -n 1 || true)"
   if [ -z "$line" ]; then
     return
   fi
@@ -65,36 +67,77 @@ load_env_api_key() {
   value="${value%\"}"
   value="${value#\'}"
   value="${value%\'}"
-  export OPENAI_API_KEY="$value"
+  printf '%s' "$value"
+}
+
+load_env_api_keys() {
+  if [ -z "${OPENAI_API_KEY:-}" ]; then
+    local openai_key
+    openai_key="$(read_env_value OPENAI_API_KEY)"
+    if [ -n "$openai_key" ]; then
+      export OPENAI_API_KEY="$openai_key"
+    fi
+  fi
+
+  if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    local anthropic_key
+    anthropic_key="$(read_env_value ANTHROPIC_API_KEY)"
+    if [ -n "$anthropic_key" ]; then
+      export ANTHROPIC_API_KEY="$anthropic_key"
+    fi
+  fi
 }
 
 write_env_api_key() {
-  local key="$1"
+  local key_name="$1"
+  local key="$2"
   local tmp_file
 
   tmp_file="$(mktemp)"
   if [ -f "$ENV_FILE" ]; then
-    grep -v -E '^[[:space:]]*(export[[:space:]]+)?OPENAI_API_KEY=' "$ENV_FILE" >"$tmp_file" || true
+    grep -v -E "^[[:space:]]*(export[[:space:]]+)?${key_name}=" "$ENV_FILE" >"$tmp_file" || true
   fi
-  printf 'OPENAI_API_KEY=%s\n' "$key" >>"$tmp_file"
+  printf '%s=%s\n' "$key_name" "$key" >>"$tmp_file"
   mv "$tmp_file" "$ENV_FILE"
 }
 
 prompt_for_api_key() {
-  if [ -n "${OPENAI_API_KEY:-}" ]; then
+  if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     return
   fi
 
-  read -r -s -p 'Enter your OpenAI API key: ' OPENAI_API_KEY
-  printf '\n'
+  local provider
+  read -r -p 'Choose a model provider (openai/anthropic): ' provider
+  provider="$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')"
 
-  if [ -z "$OPENAI_API_KEY" ]; then
-    fail "OPENAI_API_KEY cannot be empty"
+  if [ "$provider" = "openai" ]; then
+    read -r -s -p 'Enter your OpenAI API key: ' OPENAI_API_KEY
+    printf '\n'
+
+    if [ -z "$OPENAI_API_KEY" ]; then
+      fail "OPENAI_API_KEY cannot be empty"
+    fi
+
+    export OPENAI_API_KEY
+    write_env_api_key OPENAI_API_KEY "$OPENAI_API_KEY"
+    log "Saved OPENAI_API_KEY to .env"
+    return
   fi
 
-  export OPENAI_API_KEY
-  write_env_api_key "$OPENAI_API_KEY"
-  log "Saved OPENAI_API_KEY to .env"
+  if [ "$provider" != "anthropic" ]; then
+    fail "Provider must be openai or anthropic"
+  fi
+
+  read -r -s -p 'Enter your Anthropic API key: ' ANTHROPIC_API_KEY
+  printf '\n'
+
+  if [ -z "$ANTHROPIC_API_KEY" ]; then
+    fail "ANTHROPIC_API_KEY cannot be empty"
+  fi
+
+  export ANTHROPIC_API_KEY
+  write_env_api_key ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+  log "Saved ANTHROPIC_API_KEY to .env"
 }
 
 main() {
@@ -102,7 +145,7 @@ main() {
 
   require_command uv
 
-  load_env_api_key
+  load_env_api_keys
   prompt_for_api_key
 
   log "Installing Python dependencies"
@@ -110,7 +153,7 @@ main() {
   commit_dependency_changes
 
   log "Starting terminal chat"
-  uv run airline-support
+  uv run airline-support "$@"
 }
 
 main "$@"

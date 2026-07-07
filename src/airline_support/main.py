@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 from collections.abc import Callable
 import sys
 from typing import TextIO
@@ -8,19 +9,27 @@ from typing import TextIO
 from dotenv import load_dotenv
 
 from airline_support.agent import stream_agent_response
-from airline_support.sessions import append_message, create_session, read_messages, session_path
+from airline_support.sessions import (
+    append_message,
+    create_session,
+    read_messages,
+    session_id_from_log_name,
+    session_path,
+)
 
 
 EXIT_COMMANDS = {"exit", "quit", "q"}
 
 
 async def chat(
+    log_name: str | None = None,
     input_func: Callable[[str], str] = input,
     output_stream: TextIO | None = None,
 ) -> str:
     load_dotenv()
     output = output_stream or sys.stdout
-    session = create_session()
+    session_id = session_id_from_log_name(log_name) if log_name else None
+    session = create_session(session_id=session_id, overwrite=log_name is not None)
     log_path = session_path(session.id)
 
     print("SkyServe Airline Support", file=output)
@@ -59,8 +68,19 @@ async def chat(
     return str(log_path)
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chat with the SkyServe airline support agent.")
+    parser.add_argument(
+        "log_name",
+        nargs="?",
+        help="Optional session log file name, saved as logs/<name>.jsonl. Existing named logs are overwritten.",
+    )
+    return parser.parse_args(argv)
+
+
 def run() -> None:
-    asyncio.run(chat())
+    args = parse_args()
+    asyncio.run(chat(log_name=args.log_name))
 
 
 def main() -> None:
