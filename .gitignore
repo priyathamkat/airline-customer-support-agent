@@ -5,8 +5,3 @@ __pycache__/
 .ruff_cache/
 
 logs/*.jsonl
-
-web/.next/
-web/node_modules/
-web/out/
-*.tsbuildinfo

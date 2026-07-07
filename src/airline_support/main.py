@@ -1,189 +1,91 @@
 from __future__ import annotations
 
-import json
-import os
-import shutil
-import subprocess
-from collections.abc import AsyncIterator
+import asyncio
+import argparse
+from collections.abc import Callable
+import sys
+from typing import TextIO
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
 from airline_support.agent import stream_agent_response
 from airline_support.sessions import (
     append_message,
     create_session,
-    delete_session,
-    list_sessions,
     read_messages,
-    validate_session_id,
-)
-from airline_support.walkthrough import (
-    PROMPT_TRACK_ID,
-    prerequisites_status,
-    reset_track_outputs,
-    walkthrough_status,
+    session_id_from_log_name,
+    session_path,
 )
 
 
-load_dotenv()
-
-app = FastAPI(title="RELAI Sample Agent API")
+EXIT_COMMANDS = {"exit", "quit", "q"}
 
 
-def cors_origins() -> list[str]:
-    configured = os.getenv("AIRLINE_SUPPORT_CORS_ORIGINS")
-    if configured:
-        return [origin.strip() for origin in configured.split(",") if origin.strip()]
-    return ["http://localhost:3000", "http://127.0.0.1:3000"]
+async def chat(
+    log_name: str | None = None,
+    input_func: Callable[[str], str] = input,
+    output_stream: TextIO | None = None,
+) -> str:
+    load_dotenv()
+    output = output_stream or sys.stdout
+    session_id = session_id_from_log_name(log_name) if log_name else None
+    session = create_session(session_id=session_id, overwrite=log_name is not None)
+    log_path = session_path(session.id)
 
+    print("SkyServe Airline Support", file=output)
+    print(f"Session: {session.id}", file=output)
+    print(f"Log: {log_path}", file=output)
+    print("Type exit, quit, or q to end the chat.", file=output)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-class ChatRequest(BaseModel):
-    session_id: str | None = Field(default=None, alias="sessionId")
-    message: str = Field(min_length=1, max_length=4000)
-
-
-def sse_event(event: str, payload: dict[str, object]) -> str:
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=True)}\n\n"
-
-
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.post("/api/sessions")
-def create_chat_session() -> dict[str, object]:
-    return {"session": create_session()}
-
-
-@app.get("/api/sessions")
-def get_chat_sessions() -> dict[str, object]:
-    return {"sessions": list_sessions()}
-
-
-@app.get("/api/sessions/{session_id}")
-def get_chat_session(session_id: str) -> dict[str, object]:
-    try:
-        validate_session_id(session_id)
-        return {"id": session_id, "messages": read_messages(session_id)}
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail="session not found") from error
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-
-@app.delete("/api/sessions/{session_id}")
-def delete_chat_session(session_id: str) -> dict[str, object]:
-    try:
-        validate_session_id(session_id)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    if not delete_session(session_id):
-        raise HTTPException(status_code=404, detail="session not found")
-    return {"deleted": session_id}
-
-
-@app.post("/api/chat/stream")
-async def stream_chat(request: ChatRequest) -> StreamingResponse:
-    session = create_session() if request.session_id is None else None
-    session_id = request.session_id or session.id
-    try:
-        validate_session_id(session_id)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-    async def stream() -> AsyncIterator[str]:
+    while True:
         try:
-            append_message(session_id, "user", request.message)
-            messages = read_messages(session_id)
-            chunks: list[str] = []
-            yield sse_event("session", {"sessionId": session_id})
-            async for delta in stream_agent_response(messages):
-                chunks.append(delta)
-                yield sse_event("token", {"delta": delta})
-            assistant_text = "".join(chunks).strip()
-            if assistant_text:
-                append_message(session_id, "assistant", assistant_text)
-            yield sse_event("done", {"sessionId": session_id, "message": assistant_text})
-        except Exception as error:
-            yield sse_event("error", {"message": str(error)})
+            user_text = input_func("\nYou: ")
+        except EOFError:
+            print(file=output)
+            break
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+        user_text = user_text.strip()
+        if not user_text:
+            continue
+        if user_text.lower() in EXIT_COMMANDS:
+            break
 
+        append_message(session.id, "user", user_text)
+        messages = read_messages(session.id)
+        chunks: list[str] = []
 
-@app.get("/api/prerequisites/status")
-def get_prerequisites_status() -> dict[str, object]:
-    return prerequisites_status()
+        print("\nAgent: ", end="", file=output, flush=True)
+        async for delta in stream_agent_response(messages):
+            chunks.append(delta)
+            print(delta, end="", file=output, flush=True)
+        print(file=output)
 
+        assistant_text = "".join(chunks).strip()
+        if assistant_text:
+            append_message(session.id, "assistant", assistant_text)
 
-@app.post("/api/prerequisites/install-cli")
-def install_relai_cli() -> dict[str, object]:
-    if shutil.which("relai"):
-        return {"installed": True, "message": "relai CLI is already installed."}
-
-    if not shutil.which("uv"):
-        raise HTTPException(status_code=409, detail="uv is required to install the relai CLI.")
-
-    try:
-        result = subprocess.run(
-            ["uv", "tool", "install", "relai"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise HTTPException(status_code=504, detail="Timed out while installing the relai CLI.") from error
-
-    output = "\n".join(part.strip() for part in [result.stdout, result.stderr] if part.strip())
-    if result.returncode != 0:
-        raise HTTPException(
-            status_code=500,
-            detail=output[-4000:] or "Failed to install the relai CLI.",
-        )
-
-    return {
-        "installed": shutil.which("relai") is not None,
-        "message": output[-4000:] or "relai CLI installed.",
-    }
+    print(f"\nSaved conversation log to {log_path}", file=output)
+    return str(log_path)
 
 
-@app.get("/api/walkthrough/status")
-def get_walkthrough_status(
-    track_id: str = Query(default=PROMPT_TRACK_ID, alias="trackId"),
-    env_name: str | None = Query(default=None, alias="envName"),
-    prompt: str | None = Query(default=None),
-    feedback: str | None = Query(default=None),
-    session_id: str | None = Query(default=None, alias="sessionId"),
-) -> dict[str, object]:
-    return walkthrough_status(
-        track_id=track_id,
-        env_name=env_name,
-        prompt=prompt,
-        feedback=feedback,
-        session_id=session_id,
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chat with the SkyServe airline support agent.")
+    parser.add_argument(
+        "log_name",
+        nargs="?",
+        help="Optional session log file name, saved as logs/<name>.jsonl. Existing named logs are overwritten.",
     )
+    return parser.parse_args(argv)
 
 
-@app.delete("/api/walkthrough/outputs")
-def delete_walkthrough_outputs(
-    track_id: str = Query(default=PROMPT_TRACK_ID, alias="trackId"),
-    env_name: str | None = Query(default=None, alias="envName"),
-) -> dict[str, object]:
-    return reset_track_outputs(
-        track_id=track_id,
-        env_name=env_name,
-    )
+def run() -> None:
+    args = parse_args()
+    asyncio.run(chat(log_name=args.log_name))
+
+
+def main() -> None:
+    run()
+
+
+if __name__ == "__main__":
+    main()

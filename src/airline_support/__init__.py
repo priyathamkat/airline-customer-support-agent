@@ -1,4 +1,4 @@
-"""Airline support demo agent for the RELAI onboarding walkthrough."""
+"""Terminal airline support demo agent for RELAI learning loops."""
 
 __all__ = ["__version__"]
 

@@ -52,11 +52,19 @@ def session_path(session_id: str) -> Path:
     return ensure_logs_dir() / f"{validate_session_id(session_id)}.jsonl"
 
 
-def create_session() -> ChatSession:
-    session_id = f"session-{uuid4().hex[:16]}"
+def session_id_from_log_name(log_name: str) -> str:
+    name = Path(log_name).name
+    if name.endswith(".jsonl"):
+        name = name.removesuffix(".jsonl")
+    return validate_session_id(name)
+
+
+def create_session(session_id: str | None = None, overwrite: bool = False) -> ChatSession:
+    session_id = validate_session_id(session_id) if session_id else f"session-{uuid4().hex[:16]}"
     timestamp = utc_now()
     path = session_path(session_id)
-    with path.open("x", encoding="utf-8") as handle:
+    mode = "w" if overwrite else "x"
+    with path.open(mode, encoding="utf-8") as handle:
         handle.write(
             json.dumps(
                 {

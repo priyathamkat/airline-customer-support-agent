@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterable
 from agents import Agent, Runner, function_tool
 from openai.types.responses import ResponseTextDeltaEvent
 
+from airline_support.models import select_model
 from airline_support.sessions import ChatMessage
 
 
@@ -61,17 +62,24 @@ def change_seat(confirmation_code: str, requested_seat: str) -> str:
     return f"Seat updated to {seat} for booking {code}."
 
 
-AIRLINE_AGENT = Agent(
-    name="SkyServe Airline Support",
-    instructions=(
-        "You are a concise airline customer support agent for a demo airline. "
-        "Help with booking lookups, baggage policy, seat changes, and flight-change guidance. "
-        "Before changing seats or discussing a specific booking, ask for and verify the confirmation code. "
-        "Do not invent refund amounts, flight availability, fees, or policy exceptions. "
-        "Answer naturally and keep responses brief."
-    ),
-    tools=[lookup_booking, baggage_policy, change_seat],
+AIRLINE_AGENT_INSTRUCTIONS = (
+    "You are a concise airline customer support agent for a demo airline. "
+    "Help with booking lookups, baggage policy, seat changes, and flight-change guidance. "
+    "Before changing seats or discussing a specific booking, ask for and verify the confirmation code. "
+    "Do not invent refund amounts, flight availability, fees, or policy exceptions. "
+    "Answer naturally and keep responses brief."
 )
+
+
+def create_airline_agent() -> Agent:
+    selection = select_model()
+    model_kwargs = {"model": selection.model} if selection.model else {}
+    return Agent(
+        name="SkyServe Airline Support",
+        instructions=AIRLINE_AGENT_INSTRUCTIONS,
+        tools=[lookup_booking, baggage_policy, change_seat],
+        **model_kwargs,
+    )
 
 
 def _messages_to_agent_input(messages: Iterable[ChatMessage]) -> list[dict[str, str]]:
@@ -83,7 +91,7 @@ def _messages_to_agent_input(messages: Iterable[ChatMessage]) -> list[dict[str, 
 
 
 async def stream_agent_response(messages: Iterable[ChatMessage]) -> AsyncIterator[str]:
-    result = Runner.run_streamed(AIRLINE_AGENT, input=_messages_to_agent_input(messages))
+    result = Runner.run_streamed(create_airline_agent(), input=_messages_to_agent_input(messages))
     async for event in result.stream_events():
         if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
             if event.data.delta:
