@@ -1,0 +1,18 @@
+{
+  "schema_version": "relai.runtime_manifest.v1",
+  "env": [
+    {
+      "name": "OPENAI_API_KEY",
+      "required": false,
+      "sensitive": true,
+      "reason": "Set this or ANTHROPIC_API_KEY so the simulator can construct and run the airline support agent. OpenAI is preferred when both are present."
+    },
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "required": false,
+      "sensitive": true,
+      "reason": "Set this or OPENAI_API_KEY so the simulator can construct and run the airline support agent. When used, the project selects the built-in Anthropic LiteLLM model."
+    }
+  ],
+  "files": []
+}

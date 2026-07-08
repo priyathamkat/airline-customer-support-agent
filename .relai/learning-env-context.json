@@ -1,0 +1,46 @@
+{
+  "schema_version": "relai.learning_env_context.v1",
+  "agent": {
+    "entrypoint": "airline_support.agent:create_airline_agent",
+    "runner_summary": "Runs the OpenAI Agents SDK airline support agent through the RELAI simulator adapter with raw user-string turns."
+  },
+  "components": [
+    {
+      "id": "lookup_booking",
+      "import_path": "airline_support.agent:lookup_booking",
+      "when_to_use": "Use for booking lookup correctness, confirmation-code validation, or booking-specific response issues.",
+      "live_mock_targets": [],
+      "required_mock_targets": [],
+      "input_guidance": "Use named kwargs that match the tool schema, for example {\"confirmation_code\": \"SKY123\"}.",
+      "output_guidance": "Evaluate the returned booking summary or missing-booking message."
+    },
+    {
+      "id": "baggage_policy",
+      "import_path": "airline_support.agent:baggage_policy",
+      "when_to_use": "Use for baggage-policy behavior or ticket-type interpretation issues.",
+      "live_mock_targets": [],
+      "required_mock_targets": [],
+      "input_guidance": "Use named kwargs matching the tool schema, typically {\"ticket_type\": \"basic economy\"}.",
+      "output_guidance": "Evaluate the returned baggage-policy text for the requested fare type."
+    },
+    {
+      "id": "change_seat",
+      "import_path": "airline_support.agent:change_seat",
+      "when_to_use": "Use for seat-change flows, confirmation-code handling, or validation of requested seat updates.",
+      "live_mock_targets": [],
+      "required_mock_targets": [],
+      "input_guidance": "Use named kwargs matching the tool schema, for example {\"confirmation_code\": \"SKY123\", \"requested_seat\": \"14C\"}.",
+      "output_guidance": "Evaluate the seat-update confirmation or the invalid-booking error message."
+    }
+  ],
+  "log_notes": [
+    "Agent learning environments should pass each user turn as a raw string. The adapter keeps prior user and assistant turns as conversation history.",
+    "FunctionTool component targets use named JSON-schema kwargs, not positional args.",
+    "Mocked tool invocations appear under the target strings listed in .relai/mock-manifest.json."
+  ],
+  "learning_env_guidance": [
+    "Use a plain string for FixedTurn.content, such as a normal customer question. Do not wrap the turn in a message object.",
+    "Multi-turn agent environments can supply multiple user-string turns; the adapter preserves conversation history between turns.",
+    "Set OPENAI_API_KEY or ANTHROPIC_API_KEY before running the simulator. When both are set, the project selects OpenAI; otherwise it uses the Anthropic LiteLLM model defined by the project."
+  ]
+}
