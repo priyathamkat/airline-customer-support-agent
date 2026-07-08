@@ -34,8 +34,12 @@ def lookup_booking(confirmation_code: str) -> str:
     if booking is None:
         return "No booking was found for that confirmation code."
     return (
-        f"{booking['passenger']} is booked on {booking['route']} departing "
-        f"{booking['departure']}. Seat {booking['seat']}. Status: {booking['status']}."
+        "BOOKING_FOUND\n"
+        f"passenger: {booking['passenger']}\n"
+        f"route: {booking['route']}\n"
+        f"departure: {booking['departure']}\n"
+        f"seat: {booking['seat']}\n"
+        f"status: {booking['status']}"
     )
 
 
@@ -67,7 +71,10 @@ AIRLINE_AGENT_INSTRUCTIONS = (
     "Help with booking lookups, baggage policy, seat changes, and flight-change guidance. "
     "Before changing seats or discussing a specific booking, ask for and verify the confirmation code. "
     "Do not invent refund amounts, flight availability, fees, or policy exceptions. "
-    "Answer naturally and keep responses brief."
+    "Answer naturally and keep responses brief. "
+    "When a booking lookup succeeds, reply with only the booking details in plain text using exactly these five lines and exact tool values: "
+    "'Passenger: <value>', 'Route: <value>', 'Departure: <value>', 'Seat: <value>', 'Status: <value>'. "
+    "Do not reformat route or departure values, do not change capitalization except the field labels, and do not add introductions, bullets, markdown, or follow-up offers in that same reply."
 )
 
 
